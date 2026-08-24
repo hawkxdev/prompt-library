@@ -30,23 +30,14 @@ enum LibraryInputFailureReason {
 
 /// Database failure error codes.
 enum LibraryDatabaseFailureCode {
-  /// Unknown database error.
-  unknown,
-
   /// Constraint violation error.
   constraintViolation,
 
   /// Read failure error.
   readFailed,
 
-  /// Write failure error.
-  writeFailed,
-
   /// Transaction failure error.
   transactionFailed,
-
-  /// Closed connection error.
-  connectionClosed,
 
   /// Corrupt database error.
   corrupt,

@@ -1,6 +1,8 @@
 /// Drift repository implementation.
 library;
 
+import 'dart:async';
+
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:uuid/uuid.dart';
@@ -23,6 +25,15 @@ typedef Clock = DateTime Function();
 
 /// Drift library repository.
 final class DriftLibraryRepository implements LibraryRepository {
+  /// SQLite unique constraint code.
+  static const int _sqliteConstraintUnique = 2067;
+
+  /// SQLite corrupt error code.
+  static const int _sqliteCorrupt = 11;
+
+  /// SQLite invalid database code.
+  static const int _sqliteNotDatabase = 26;
+
   /// Local database instance.
   final LibraryDatabase _db;
 
@@ -50,70 +61,98 @@ final class DriftLibraryRepository implements LibraryRepository {
   /// Watches library snapshots.
   @override
   Stream<LibrarySnapshot> watchSnapshot() {
-    return _db
+    final source = _db
         .customSelect(
           'SELECT 1',
           readsFrom: {_db.entries, _db.categories, _db.tags, _db.entryTags},
         )
         .watch()
         .asyncMap((_) => getSnapshot());
+
+    return Stream<LibrarySnapshot>.multi((controller) {
+      var emitted = false;
+      final subscription = source.listen(
+        (snapshot) {
+          emitted = true;
+          controller.add(snapshot);
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          controller.addError(_mapReadError(error), stackTrace);
+        },
+        onDone: () async {
+          if (!emitted) {
+            try {
+              controller.add(await getSnapshot());
+            } on Object catch (error, stackTrace) {
+              controller.addError(_mapReadError(error), stackTrace);
+            }
+          }
+          controller.close();
+        },
+      );
+      controller.onCancel = subscription.cancel;
+    });
   }
 
   /// Reads library snapshot.
   @override
   Future<LibrarySnapshot> getSnapshot() {
-    return _db.transaction(() async {
-      final entriesData = await _db.select(_db.entries).get();
-      final categoriesData = await _db.select(_db.categories).get();
-      final tagsData = await _db.select(_db.tags).get();
-      final entryTagsData = await _db.select(_db.entryTags).get();
+    return _wrapDbRead(
+      () => _db.transaction(() async {
+        final entriesData = await _db.select(_db.entries).get();
+        final categoriesData = await _db.select(_db.categories).get();
+        final tagsData = await _db.select(_db.tags).get();
+        final entryTagsData = await _db.select(_db.entryTags).get();
 
-      final tagIdsByEntryId = <String, List<String>>{};
-      for (final entryTag in entryTagsData) {
-        (tagIdsByEntryId[entryTag.entryId] ??= <String>[]).add(entryTag.tagId);
-      }
+        final tagIdsByEntryId = <String, List<String>>{};
+        for (final entryTag in entryTagsData) {
+          (tagIdsByEntryId[entryTag.entryId] ??= <String>[]).add(
+            entryTag.tagId,
+          );
+        }
 
-      final entries = entriesData.map((row) {
-        return Entry(
-          id: row.id,
-          title: row.title,
-          body: row.body,
-          keyword: row.keyword,
-          categoryId: row.categoryId,
-          tagIds: tagIdsByEntryId[row.id] ?? const [],
-          isFavorite: row.isFavorite,
-          isArchived: row.isArchived,
-          createdAt: row.createdAt,
-          updatedAt: row.updatedAt,
-          lastCopiedAt: row.lastCopiedAt,
+        final entries = entriesData.map((row) {
+          return Entry(
+            id: row.id,
+            title: row.title,
+            body: row.body,
+            keyword: row.keyword,
+            categoryId: row.categoryId,
+            tagIds: tagIdsByEntryId[row.id] ?? const [],
+            isFavorite: row.isFavorite,
+            isArchived: row.isArchived,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+            lastCopiedAt: row.lastCopiedAt,
+          );
+        });
+
+        final categories = categoriesData.map((row) {
+          return Category(
+            id: row.id,
+            name: row.name,
+            normalizedName: row.normalizedName,
+            sortOrder: row.sortOrder,
+            createdAt: row.createdAt,
+          );
+        });
+
+        final tags = tagsData.map((row) {
+          return Tag(
+            id: row.id,
+            name: row.name,
+            normalizedName: row.normalizedName,
+            createdAt: row.createdAt,
+          );
+        });
+
+        return LibrarySnapshot(
+          entries: entries,
+          categories: categories,
+          tags: tags,
         );
-      });
-
-      final categories = categoriesData.map((row) {
-        return Category(
-          id: row.id,
-          name: row.name,
-          normalizedName: row.normalizedName,
-          sortOrder: row.sortOrder,
-          createdAt: row.createdAt,
-        );
-      });
-
-      final tags = tagsData.map((row) {
-        return Tag(
-          id: row.id,
-          name: row.name,
-          normalizedName: row.normalizedName,
-          createdAt: row.createdAt,
-        );
-      });
-
-      return LibrarySnapshot(
-        entries: entries,
-        categories: categories,
-        tags: tags,
-      );
-    });
+      }),
+    );
   }
 
   /// Creates library entry.
@@ -708,50 +747,111 @@ final class DriftLibraryRepository implements LibraryRepository {
       return await action();
     } on LibraryFailure {
       rethrow;
-    } on Exception catch (e) {
-      if (_isDuplicateCategoryError(e)) {
-        throw const LibraryFailure.duplicateCategoryName();
-      }
-      if (_isDuplicateTagError(e)) {
-        throw const LibraryFailure.duplicateTagName();
-      }
-      if (_isConstraintError(e)) {
-        throw const LibraryFailure.databaseFailure(
-          code: LibraryDatabaseFailureCode.constraintViolation,
-        );
-      }
-      throw const LibraryFailure.databaseFailure(
-        code: LibraryDatabaseFailureCode.unknown,
+    } on DriftWrappedException catch (error) {
+      if (!_containsSqliteException(error)) rethrow;
+      throw _mapDatabaseFailure(
+        error,
+        fallback: LibraryDatabaseFailureCode.transactionFailed,
+      );
+    } on SqliteException catch (error) {
+      throw _mapDatabaseFailure(
+        error,
+        fallback: LibraryDatabaseFailureCode.transactionFailed,
       );
     }
   }
 
+  /// Maps read error.
+  static Object _mapReadError(Object error) {
+    if (error is LibraryFailure) return error;
+    if (_containsSqliteException(error)) {
+      return _mapDatabaseFailure(
+        error,
+        fallback: LibraryDatabaseFailureCode.readFailed,
+      );
+    }
+    return error;
+  }
+
+  /// Wraps database reads.
+  Future<T> _wrapDbRead<T>(Future<T> Function() action) async {
+    try {
+      return await action();
+    } on LibraryFailure {
+      rethrow;
+    } on DriftWrappedException catch (error) {
+      if (!_containsSqliteException(error)) rethrow;
+      throw _mapDatabaseFailure(
+        error,
+        fallback: LibraryDatabaseFailureCode.readFailed,
+      );
+    } on SqliteException catch (error) {
+      throw _mapDatabaseFailure(
+        error,
+        fallback: LibraryDatabaseFailureCode.readFailed,
+      );
+    }
+  }
+
+  /// Maps database failure.
+  static LibraryFailure _mapDatabaseFailure(
+    Object error, {
+    required LibraryDatabaseFailureCode fallback,
+  }) {
+    if (_isDuplicateCategoryError(error)) {
+      return const LibraryFailure.duplicateCategoryName();
+    }
+    if (_isDuplicateTagError(error)) {
+      return const LibraryFailure.duplicateTagName();
+    }
+    if (_isConstraintError(error)) {
+      return const LibraryFailure.databaseFailure(
+        code: LibraryDatabaseFailureCode.constraintViolation,
+      );
+    }
+    final sqlite = _findSqliteException(error);
+    if (sqlite != null &&
+        (sqlite.resultCode == _sqliteCorrupt ||
+            sqlite.resultCode == _sqliteNotDatabase)) {
+      return const LibraryFailure.databaseFailure(
+        code: LibraryDatabaseFailureCode.corrupt,
+      );
+    }
+    return LibraryFailure.databaseFailure(code: fallback);
+  }
+
+  /// Finds SQLite exception.
+  static SqliteException? _findSqliteException(Object error) {
+    if (error is SqliteException) return error;
+    if (error is DriftWrappedException && error.cause != null) {
+      return _findSqliteException(error.cause!);
+    }
+    return null;
+  }
+
+  /// Detects SQLite exception.
+  static bool _containsSqliteException(Object error) {
+    return _findSqliteException(error) != null;
+  }
+
   /// Checks duplicate category error.
   static bool _isDuplicateCategoryError(Object error) {
-    if (error is DriftWrappedException) {
-      final cause = error.cause;
-      if (cause != null && _isDuplicateCategoryError(cause)) {
-        return true;
-      }
+    if (error is DriftWrappedException && error.cause != null) {
+      return _isDuplicateCategoryError(error.cause!);
     }
-    final errStr = error.toString().toLowerCase();
-    return errStr.contains('categories.normalized_name') ||
-        (errStr.contains('categories') &&
-            (errStr.contains('unique') || errStr.contains('constraint')));
+    if (error is! SqliteException) return false;
+    return error.extendedResultCode == _sqliteConstraintUnique &&
+        error.message.toLowerCase().contains('categories.normalized_name');
   }
 
   /// Checks duplicate tag error.
   static bool _isDuplicateTagError(Object error) {
-    if (error is DriftWrappedException) {
-      final cause = error.cause;
-      if (cause != null && _isDuplicateTagError(cause)) {
-        return true;
-      }
+    if (error is DriftWrappedException && error.cause != null) {
+      return _isDuplicateTagError(error.cause!);
     }
-    final errStr = error.toString().toLowerCase();
-    return errStr.contains('tags.normalized_name') ||
-        (errStr.contains('tags') &&
-            (errStr.contains('unique') || errStr.contains('constraint')));
+    if (error is! SqliteException) return false;
+    return error.extendedResultCode == _sqliteConstraintUnique &&
+        error.message.toLowerCase().contains('tags.normalized_name');
   }
 
   /// Checks constraint violation error.

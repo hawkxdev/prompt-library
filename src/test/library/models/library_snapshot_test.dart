@@ -175,17 +175,17 @@ void main() {
       );
     });
 
-    test('sorts categories deterministically by sortOrder then normalizedName then id', () {
+    test('sorts categories deterministically by sortOrder then id', () {
       final cat1 = makeCategory(
         id: 'cat-z',
         name: 'Alpha Z',
-        normalizedName: 'alpha z',
+        normalizedName: 'alpha first',
         sortOrder: 1,
       );
       final cat2 = makeCategory(
         id: 'cat-a',
         name: 'Alpha A',
-        normalizedName: 'alpha a',
+        normalizedName: 'zeta last',
         sortOrder: 1,
       );
       final cat3 = makeCategory(
@@ -217,17 +217,17 @@ void main() {
       );
     });
 
-    test('sorts tags deterministically by normalizedName then id', () {
-      final tagZ = makeTag(id: 'tag-3', name: 'Zeta', normalizedName: 'zeta');
-      final tagB = makeTag(id: 'tag-2', name: 'Beta', normalizedName: 'beta');
+    test('sorts tags deterministically by name then id', () {
+      final tagZ = makeTag(id: 'tag-3', name: 'Alpha', normalizedName: 'zeta');
+      final tagB = makeTag(id: 'tag-2', name: 'Zulu', normalizedName: 'beta');
       final tagA2 = makeTag(
         id: 'tag-1b',
-        name: 'Alpha 2',
+        name: 'Middle 2',
         normalizedName: 'alpha',
       );
       final tagA1 = makeTag(
         id: 'tag-1a',
-        name: 'Alpha 1',
+        name: 'Middle 1',
         normalizedName: 'alpha',
       );
 
@@ -235,7 +235,7 @@ void main() {
 
       expect(
         snapshot.tags.map((t) => t.id).toList(),
-        equals(['tag-1a', 'tag-1b', 'tag-2', 'tag-3']),
+        equals(['tag-3', 'tag-1a', 'tag-1b', 'tag-2']),
       );
     });
 

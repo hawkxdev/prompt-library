@@ -361,17 +361,20 @@ void main() {
 
       test('supports direct subclass constructor', () {
         const failure = DatabaseFailureLibraryFailure(
-          code: LibraryDatabaseFailureCode.writeFailed,
+          code: LibraryDatabaseFailureCode.transactionFailed,
         );
-        expect(failure.code, equals(LibraryDatabaseFailureCode.writeFailed));
+        expect(
+          failure.code,
+          equals(LibraryDatabaseFailureCode.transactionFailed),
+        );
       });
 
       test('supports value equality and hashCode consistency', () {
         const failure1 = LibraryFailure.databaseFailure(
-          code: LibraryDatabaseFailureCode.writeFailed,
+          code: LibraryDatabaseFailureCode.transactionFailed,
         );
         const failure2 = DatabaseFailureLibraryFailure(
-          code: LibraryDatabaseFailureCode.writeFailed,
+          code: LibraryDatabaseFailureCode.transactionFailed,
         );
         const differentCode = LibraryFailure.databaseFailure(
           code: LibraryDatabaseFailureCode.readFailed,
@@ -415,7 +418,7 @@ void main() {
             actualCount: 1,
           ),
           const LibraryFailure.databaseFailure(
-            code: LibraryDatabaseFailureCode.unknown,
+            code: LibraryDatabaseFailureCode.corrupt,
           ),
         ];
 
@@ -450,7 +453,7 @@ void main() {
             'tag_not_found_t1',
             'invalid_input_emptyTitle',
             'reorder_2_1',
-            'db_unknown',
+            'db_corrupt',
           ]),
         );
       });

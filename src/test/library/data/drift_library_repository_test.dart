@@ -548,6 +548,77 @@ void main() {
 
       await subscription.cancel();
     });
+    test('getSnapshot maps database open failure to read failure', () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'prompt_library_unopenable_',
+      );
+      final failingDb = LibraryDatabase.forTesting(
+        NativeDatabase(File(tempDir.path)),
+      );
+      final failingRepository = DriftLibraryRepository(failingDb);
+
+      try {
+        expect(
+          () => failingRepository.getSnapshot(),
+          throwsA(
+            const LibraryFailure.databaseFailure(
+              code: LibraryDatabaseFailureCode.readFailed,
+            ),
+          ),
+        );
+      } finally {
+        await failingDb.close();
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    test('watchSnapshot maps corrupt database to stable failure', () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'prompt_library_corrupt_stream_',
+      );
+      final dbFile = File(p.join(tempDir.path, 'corrupt.sqlite'));
+      await dbFile.writeAsString('not a sqlite database');
+      final corruptDb = LibraryDatabase.forTesting(NativeDatabase(dbFile));
+      final corruptRepository = DriftLibraryRepository(corruptDb);
+
+      try {
+        expect(
+          () => corruptRepository.watchSnapshot().first,
+          throwsA(
+            const LibraryFailure.databaseFailure(
+              code: LibraryDatabaseFailureCode.corrupt,
+            ),
+          ),
+        );
+      } finally {
+        await corruptDb.close();
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    test('getSnapshot maps corrupt database to stable failure', () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'prompt_library_corrupt_',
+      );
+      final dbFile = File(p.join(tempDir.path, 'corrupt.sqlite'));
+      await dbFile.writeAsString('not a sqlite database');
+      final corruptDb = LibraryDatabase.forTesting(NativeDatabase(dbFile));
+      final corruptRepository = DriftLibraryRepository(corruptDb);
+
+      try {
+        expect(
+          () => corruptRepository.getSnapshot(),
+          throwsA(
+            const LibraryFailure.databaseFailure(
+              code: LibraryDatabaseFailureCode.corrupt,
+            ),
+          ),
+        );
+      } finally {
+        await corruptDb.close();
+        await tempDir.delete(recursive: true);
+      }
+    });
   });
 
   // === Entry Mutations and Invariants ===
@@ -598,6 +669,32 @@ void main() {
             ),
           );
     }
+
+    test('createEntry preserves unexpected clock exception', () async {
+      final clockFailure = Exception('clock failure');
+      repository = DriftLibraryRepository(
+        db,
+        uuidGenerator: () => 'clock-entry',
+        clock: () => throw clockFailure,
+      );
+
+      final input = EntryInput.validate(title: 'Clock', body: 'Body');
+
+      expect(() => repository.createEntry(input), throwsA(same(clockFailure)));
+    });
+
+    test('createEntry preserves unexpected UUID exception', () async {
+      final uuidFailure = Exception('uuid failure');
+      repository = DriftLibraryRepository(
+        db,
+        uuidGenerator: () => throw uuidFailure,
+        clock: () => DateTime.utc(2026, 8, 24, 10, 0),
+      );
+
+      final input = EntryInput.validate(title: 'UUID', body: 'Body');
+
+      expect(() => repository.createEntry(input), throwsA(same(uuidFailure)));
+    });
 
     test('createEntry inserts entry and entry_tags atomically with UTC timestamps and trimmed fields', () async {
       await seedCategory('cat-dev', 'Development', 0);
@@ -1284,27 +1381,52 @@ void main() {
     });
 
     test('createCategory maps unique constraint race to duplicateCategoryName failure', () async {
-      currentUuid = 'cat-race-1';
-      await repository.createCategory('Concurrent Cat');
-
-      await db
-          .into(db.categories)
-          .insert(
-            CategoriesCompanion.insert(
-              id: 'cat-race-direct',
-              name: 'Directly Inserted',
-              normalizedName: 'raced normalized name',
-              sortOrder: 5,
-              createdAt: DateTime.utc(2026, 8, 24, 10, 0, 0),
-            ),
+      await db.customStatement('''
+        CREATE TRIGGER category_normalized_name_race
+        BEFORE INSERT ON categories
+        WHEN NEW.id = 'cat-race-2'
+        BEGIN
+          INSERT INTO categories (
+            id,
+            name,
+            normalized_name,
+            sort_order,
+            created_at
+          ) VALUES (
+            'cat-race-direct',
+            'Directly Inserted',
+            NEW.normalized_name,
+            5,
+            NEW.created_at
           );
+        END;
+      ''');
 
       currentUuid = 'cat-race-2';
       expect(
         () => repository.createCategory('  Raced Normalized Name  '),
         throwsA(const LibraryFailure.duplicateCategoryName()),
       );
+      expect(await db.select(db.categories).get(), isEmpty);
     });
+
+    test(
+      'createCategory maps primary key collision to constraint failure',
+      () async {
+        currentUuid = 'shared-category-id';
+        await repository.createCategory('First Category');
+
+        currentUuid = 'shared-category-id';
+        expect(
+          () => repository.createCategory('Second Category'),
+          throwsA(
+            const LibraryFailure.databaseFailure(
+              code: LibraryDatabaseFailureCode.constraintViolation,
+            ),
+          ),
+        );
+      },
+    );
 
     test(
       'renameCategory throws categoryNotFound failure for missing category ID',
@@ -1747,24 +1869,48 @@ void main() {
     test(
       'createTag maps unique constraint race to duplicateTagName failure',
       () async {
-        currentUuid = 'tag-race-1';
-        await repository.createTag('Concurrent Tag');
-
-        await db
-            .into(db.tags)
-            .insert(
-              TagsCompanion.insert(
-                id: 'tag-race-direct',
-                name: 'Directly Inserted',
-                normalizedName: 'raced tag normalized name',
-                createdAt: DateTime.utc(2026, 8, 24, 10, 0, 0),
-              ),
+        await db.customStatement('''
+          CREATE TRIGGER tag_normalized_name_race
+          BEFORE INSERT ON tags
+          WHEN NEW.id = 'tag-race-2'
+          BEGIN
+            INSERT INTO tags (
+              id,
+              name,
+              normalized_name,
+              created_at
+            ) VALUES (
+              'tag-race-direct',
+              'Directly Inserted',
+              NEW.normalized_name,
+              NEW.created_at
             );
+          END;
+        ''');
 
         currentUuid = 'tag-race-2';
         expect(
           () => repository.createTag('  Raced Tag Normalized Name  '),
           throwsA(const LibraryFailure.duplicateTagName()),
+        );
+        expect(await db.select(db.tags).get(), isEmpty);
+      },
+    );
+
+    test(
+      'createTag maps primary key collision to constraint failure',
+      () async {
+        currentUuid = 'shared-tag-id';
+        await repository.createTag('First Tag');
+
+        currentUuid = 'shared-tag-id';
+        expect(
+          () => repository.createTag('Second Tag'),
+          throwsA(
+            const LibraryFailure.databaseFailure(
+              code: LibraryDatabaseFailureCode.constraintViolation,
+            ),
+          ),
         );
       },
     );

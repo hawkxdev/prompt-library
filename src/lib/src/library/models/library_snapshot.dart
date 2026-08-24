@@ -38,15 +38,13 @@ final class LibrarySnapshot {
          categories.toList()..sort((a, b) {
            final sort = a.sortOrder.compareTo(b.sortOrder);
            if (sort != 0) return sort;
-           final norm = a.normalizedName.compareTo(b.normalizedName);
-           if (norm != 0) return norm;
            return a.id.compareTo(b.id);
          }),
        ),
        tags = List<Tag>.unmodifiable(
          tags.toList()..sort((a, b) {
-           final norm = a.normalizedName.compareTo(b.normalizedName);
-           if (norm != 0) return norm;
+           final name = a.name.compareTo(b.name);
+           if (name != 0) return name;
            return a.id.compareTo(b.id);
          }),
        );
