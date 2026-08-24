@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 /// Root application widget.
 class PromptLibraryApp extends StatelessWidget {
+  /// Creates application widget.
   const PromptLibraryApp({super.key});
 
   /// Application bar title.

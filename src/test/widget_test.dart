@@ -1,4 +1,4 @@
-/// Shell contract tests. Literal strings keep asserts falsifiable.
+/// Shell contract tests.
 library;
 
 import 'package:flutter_test/flutter_test.dart';
