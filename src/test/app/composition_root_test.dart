@@ -1,6 +1,8 @@
 /// Composition root tests.
 library;
 
+import 'dart:ui' show AppExitResponse;
+
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompt_library/src/app/composition_root.dart';
@@ -38,6 +40,20 @@ void main() {
       database.customSelect('SELECT 1').get(),
       throwsStateError,
     );
+  });
+
+  test('does not dispose while voting on an exit request', () async {
+    var disposeCalls = 0;
+    final lifecycle = PromptLibraryLifecycle(() async {
+      disposeCalls++;
+    });
+
+    expect(await lifecycle.requestExit(), AppExitResponse.exit);
+    expect(disposeCalls, 0);
+
+    lifecycle.release();
+    await pumpEventQueue();
+    expect(disposeCalls, 1);
   });
 }
 

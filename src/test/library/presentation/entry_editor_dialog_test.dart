@@ -1,9 +1,12 @@
 /// Entry editor dialog tests.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompt_library/src/library/models/library_failure.dart';
+import 'package:prompt_library/src/library/models/entry_input.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/entry_editor_dialog.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
@@ -66,5 +69,86 @@ void main() {
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('disables save for an active create mutation', (tester) async {
+    final repository = TestLibraryRepository();
+    final controller = LibraryController(repository: repository);
+    addTearDown(() async {
+      await controller.dispose();
+      await repository.close();
+    });
+    repository.emit(const LibrarySnapshot.empty());
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    final gate = Completer<void>();
+    repository.nextMutationGate = gate;
+    final pending = controller.createEntry(
+      EntryInput.validate(title: 'Existing create', body: 'Body'),
+    );
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () =>
+                showEntryEditorDialog(context, controller: controller),
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pump();
+
+    final save = tester.widget<FilledButton>(find.byType(FilledButton));
+    expect(find.text('Saving…'), findsOneWidget);
+    expect(save.onPressed, isNull);
+
+    gate.complete();
+    await pending;
+  });
+
+  testWidgets('disables save for an active update mutation', (tester) async {
+    final repository = TestLibraryRepository();
+    final controller = LibraryController(repository: repository);
+    addTearDown(() async {
+      await controller.dispose();
+      await repository.close();
+    });
+    final entry = testEntry('entry-1');
+    repository.emit(LibrarySnapshot(entries: [entry]));
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    final gate = Completer<void>();
+    repository.nextMutationGate = gate;
+    final pending = controller.updateEntry(
+      entry.id,
+      EntryInput.validate(title: 'Pending update', body: 'Body'),
+    );
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showEntryEditorDialog(
+              context,
+              controller: controller,
+              entry: entry,
+            ),
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pump();
+
+    final save = tester.widget<FilledButton>(find.byType(FilledButton));
+    expect(find.text('Saving…'), findsOneWidget);
+    expect(save.onPressed, isNull);
+
+    gate.complete();
+    await pending;
   });
 }

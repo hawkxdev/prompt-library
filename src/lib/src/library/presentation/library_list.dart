@@ -13,6 +13,8 @@ final class LibraryList extends StatelessWidget {
     required this.selectedEntryId,
     required this.onSelected,
     required this.focusNode,
+    required this.scrollController,
+    required this.rowKeyFor,
     super.key,
   });
 
@@ -28,21 +30,45 @@ final class LibraryList extends StatelessWidget {
   /// Keyboard focus owner.
   final FocusNode focusNode;
 
+  /// Result list scroll owner.
+  final ScrollController scrollController;
+
+  /// Resolves stable row keys.
+  final GlobalKey Function(String id) rowKeyFor;
+
   @override
   Widget build(BuildContext context) {
-    return Focus(
-      focusNode: focusNode,
+    return AnimatedBuilder(
+      animation: focusNode,
+      builder: (context, child) => Focus(
+        focusNode: focusNode,
+        child: DecoratedBox(
+          key: const Key('library-list-focus-outline'),
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: focusNode.hasFocus
+                  ? const Color(0xFF315E9E)
+                  : Colors.transparent,
+              width: 2,
+            ),
+          ),
+          child: child,
+        ),
+      ),
       child: ListView.builder(
+        controller: scrollController,
+        itemExtent: 52,
         itemCount: entries.length,
         itemBuilder: (context, index) {
           final entry = entries[index];
           final selected = entry.id == selectedEntryId;
           return Semantics(
+            key: ValueKey('entry-${entry.id}'),
             selected: selected,
             button: true,
             label: entry.title,
             child: InkWell(
-              key: ValueKey('entry-${entry.id}'),
+              key: rowKeyFor(entry.id),
               onTap: () {
                 focusNode.requestFocus();
                 onSelected(entry.id);

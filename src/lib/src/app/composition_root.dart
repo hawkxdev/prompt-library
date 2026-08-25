@@ -59,6 +59,22 @@ final class PromptLibraryComposition {
   }
 }
 
+/// Coordinates exit voting and post-exit release.
+final class PromptLibraryLifecycle {
+  /// Creates a lifecycle coordinator.
+  PromptLibraryLifecycle(this._dispose);
+
+  final Future<void> Function() _dispose;
+
+  /// Votes without releasing dependencies.
+  Future<AppExitResponse> requestExit() async => AppExitResponse.exit;
+
+  /// Releases dependencies after detach or widget teardown.
+  void release() {
+    unawaited(_dispose());
+  }
+}
+
 /// Creates and owns production dependencies.
 final class PromptLibraryCompositionRoot extends StatefulWidget {
   /// Creates production root.
@@ -72,24 +88,24 @@ final class PromptLibraryCompositionRoot extends StatefulWidget {
 final class _PromptLibraryCompositionRootState
     extends State<PromptLibraryCompositionRoot> {
   late final PromptLibraryComposition _composition;
+  late final PromptLibraryLifecycle _lifecycle;
   late final AppLifecycleListener _lifecycleListener;
 
   @override
   void initState() {
     super.initState();
     _composition = PromptLibraryComposition.production();
+    _lifecycle = PromptLibraryLifecycle(_composition.dispose);
     _lifecycleListener = AppLifecycleListener(
-      onExitRequested: () async {
-        await _composition.dispose();
-        return AppExitResponse.exit;
-      },
+      onExitRequested: _lifecycle.requestExit,
+      onDetach: _lifecycle.release,
     );
   }
 
   @override
   void dispose() {
     _lifecycleListener.dispose();
-    unawaited(_composition.dispose());
+    _lifecycle.release();
     super.dispose();
   }
 

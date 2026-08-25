@@ -69,7 +69,18 @@ final class _EntryEditorDialogState extends State<_EntryEditorDialog> {
     super.dispose();
   }
 
+  LibraryMutationKey get _mutationKey {
+    final entry = widget.entry;
+    return entry == null
+        ? const LibraryMutationKey(LibraryMutationKind.createEntry)
+        : LibraryMutationKey(
+            LibraryMutationKind.updateEntry,
+            entityId: entry.id,
+          );
+  }
+
   Future<void> _save() async {
+    if (_state.isMutationActive(_mutationKey)) return;
     if (_title.text.trim().isEmpty) {
       setState(() => _error = 'Title is required.');
       return;
@@ -112,6 +123,7 @@ final class _EntryEditorDialogState extends State<_EntryEditorDialog> {
   @override
   Widget build(BuildContext context) {
     final snapshot = _state.snapshot;
+    final isSaving = _isSaving || _state.isMutationActive(_mutationKey);
     return AlertDialog(
       title: Text(widget.entry == null ? 'New prompt' : 'Edit prompt'),
       content: SizedBox(
@@ -195,12 +207,12 @@ final class _EntryEditorDialogState extends State<_EntryEditorDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: _isSaving ? null : () => Navigator.pop(context),
+          onPressed: isSaving ? null : () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
         FilledButton(
-          onPressed: _isSaving ? null : _save,
-          child: Text(_isSaving ? 'Saving…' : 'Save'),
+          onPressed: isSaving ? null : _save,
+          child: Text(isSaving ? 'Saving…' : 'Save'),
         ),
       ],
     );

@@ -24,6 +24,9 @@ final class TestLibraryRepository implements LibraryRepository {
   /// Next typed mutation failure.
   LibraryFailure? nextFailure;
 
+  /// Blocks the next repository mutation until completed.
+  Completer<void>? nextMutationGate;
+
   /// Emits a complete snapshot.
   void emit(LibrarySnapshot snapshot) {
     _snapshot = snapshot;
@@ -37,6 +40,12 @@ final class TestLibraryRepository implements LibraryRepository {
     final failure = nextFailure;
     nextFailure = null;
     if (failure != null) throw failure;
+  }
+
+  Future<void> _waitIfNeeded() async {
+    final gate = nextMutationGate;
+    nextMutationGate = null;
+    await gate?.future;
   }
 
   void _publish({
@@ -62,6 +71,7 @@ final class TestLibraryRepository implements LibraryRepository {
   @override
   Future<Entry> createEntry(EntryInput input) async {
     calls.add('createEntry');
+    await _waitIfNeeded();
     await _failIfNeeded();
     final now = DateTime.utc(2026, 1, 1, 12, _nextId);
     final entry = Entry(
@@ -83,6 +93,7 @@ final class TestLibraryRepository implements LibraryRepository {
   @override
   Future<Entry> updateEntry(String id, EntryInput input) async {
     calls.add('updateEntry:$id');
+    await _waitIfNeeded();
     await _failIfNeeded();
     final current = _snapshot.entries.singleWhere((entry) => entry.id == id);
     final updated = current.copyWith(
@@ -106,6 +117,7 @@ final class TestLibraryRepository implements LibraryRepository {
   @override
   Future<void> deleteEntry(String id) async {
     calls.add('deleteEntry:$id');
+    await _waitIfNeeded();
     await _failIfNeeded();
     _publish(entries: _snapshot.entries.where((entry) => entry.id != id));
   }
@@ -126,6 +138,7 @@ final class TestLibraryRepository implements LibraryRepository {
   @override
   Future<void> setFavorite(String id, {required bool isFavorite}) async {
     calls.add('setFavorite:$id:$isFavorite');
+    await _waitIfNeeded();
     await _failIfNeeded();
     _publish(
       entries: _snapshot.entries.map(
@@ -138,6 +151,7 @@ final class TestLibraryRepository implements LibraryRepository {
   @override
   Future<void> setArchived(String id, {required bool isArchived}) async {
     calls.add('setArchived:$id:$isArchived');
+    await _waitIfNeeded();
     await _failIfNeeded();
     _publish(
       entries: _snapshot.entries.map(
@@ -150,6 +164,7 @@ final class TestLibraryRepository implements LibraryRepository {
   @override
   Future<Category> createCategory(String name) async {
     calls.add('createCategory');
+    await _waitIfNeeded();
     await _failIfNeeded();
     final category = testCategory(
       'category-${_nextId++}',
@@ -163,6 +178,7 @@ final class TestLibraryRepository implements LibraryRepository {
   @override
   Future<Category> renameCategory(String id, String newName) async {
     calls.add('renameCategory:$id');
+    await _waitIfNeeded();
     await _failIfNeeded();
     final current = _snapshot.categories.singleWhere((value) => value.id == id);
     final updated = current.copyWith(
@@ -180,6 +196,7 @@ final class TestLibraryRepository implements LibraryRepository {
   @override
   Future<void> deleteCategory(String id) async {
     calls.add('deleteCategory:$id');
+    await _waitIfNeeded();
     await _failIfNeeded();
     _publish(
       categories: _snapshot.categories.where((value) => value.id != id),
@@ -193,6 +210,7 @@ final class TestLibraryRepository implements LibraryRepository {
   @override
   Future<void> reorderCategories(List<String> orderedCategoryIds) async {
     calls.add('reorderCategories');
+    await _waitIfNeeded();
     await _failIfNeeded();
     final byId = {
       for (final category in _snapshot.categories) category.id: category,
@@ -208,6 +226,7 @@ final class TestLibraryRepository implements LibraryRepository {
   @override
   Future<Tag> createTag(String name) async {
     calls.add('createTag');
+    await _waitIfNeeded();
     await _failIfNeeded();
     final tag = testTag('tag-${_nextId++}', name);
     _publish(tags: [..._snapshot.tags, tag]);
@@ -217,6 +236,7 @@ final class TestLibraryRepository implements LibraryRepository {
   @override
   Future<Tag> renameTag(String id, String newName) async {
     calls.add('renameTag:$id');
+    await _waitIfNeeded();
     await _failIfNeeded();
     final current = _snapshot.tags.singleWhere((value) => value.id == id);
     final updated = current.copyWith(
@@ -232,6 +252,7 @@ final class TestLibraryRepository implements LibraryRepository {
   @override
   Future<void> deleteTag(String id) async {
     calls.add('deleteTag:$id');
+    await _waitIfNeeded();
     await _failIfNeeded();
     _publish(
       tags: _snapshot.tags.where((value) => value.id != id),

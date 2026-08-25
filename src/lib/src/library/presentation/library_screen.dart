@@ -44,6 +44,8 @@ final class _LibraryScreenState extends State<LibraryScreen> {
   late final TextEditingController _searchController;
   final FocusNode _searchFocus = FocusNode(debugLabel: 'library-search');
   final FocusNode _listFocus = FocusNode(debugLabel: 'library-list');
+  final ScrollController _listScrollController = ScrollController();
+  final Map<String, GlobalKey> _rowKeys = {};
   bool _showNarrowDetail = false;
 
   @override
@@ -63,6 +65,8 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     _searchController.dispose();
     _searchFocus.dispose();
     _listFocus.dispose();
+    _listScrollController.dispose();
+    _rowKeys.clear();
     super.dispose();
   }
 
@@ -79,15 +83,14 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     final entry = _selectedEntry;
     if (entry == null) return;
     try {
-      await widget.clipboard.writeText(entry.body);
+      await copyLibraryEntry(
+        entry: entry,
+        clipboard: widget.clipboard,
+        controller: widget.controller,
+      );
     } on LibraryClipboardFailure {
       if (mounted) _showMessage('The prompt could not be copied.');
       return;
-    }
-    try {
-      await widget.controller.markCopied(entry.id);
-    } on LibraryFailure {
-      // The clipboard already contains the exact body; retained state shows metadata failure.
     }
     if (mounted) _showMessage('Copied');
   }
@@ -106,6 +109,80 @@ final class _LibraryScreenState extends State<LibraryScreen> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<void> _showLibraryNavigation() {
+    return showDialog<void>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        child: SizedBox(
+          width: 320,
+          height: 520,
+          child: StreamBuilder<LibraryState>(
+            initialData: widget.controller.state,
+            stream: widget.controller.states,
+            builder: (context, stateSnapshot) {
+              final state = stateSnapshot.data ?? widget.controller.state;
+              final snapshot = state.snapshot;
+              if (snapshot == null) return const SizedBox.shrink();
+              return LibrarySidebar(
+                snapshot: snapshot,
+                filter: state.filter,
+                onScope: widget.controller.setFilterScope,
+                onCategory: widget.controller.setCategoryFilter,
+                onTags: widget.controller.setTagFilter,
+                onManageTaxonomy: () {
+                  Navigator.pop(dialogContext);
+                  unawaited(
+                    showTaxonomyDialog(
+                      this.context,
+                      controller: widget.controller,
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  GlobalKey _rowKeyFor(String id) {
+    return _rowKeys.putIfAbsent(id, () => GlobalKey(debugLabel: 'entry-$id'));
+  }
+
+  void _selectAndReveal(int index) {
+    final entry = _state.visibleEntries[index];
+    if (_listScrollController.hasClients) {
+      final position = _listScrollController.position;
+      const itemExtent = 52.0;
+      final itemStart = index * itemExtent;
+      final itemEnd = itemStart + itemExtent;
+      if (itemStart < position.pixels ||
+          itemEnd > position.pixels + position.viewportDimension) {
+        final target =
+            (itemStart - (position.viewportDimension - itemExtent) / 2)
+                .clamp(position.minScrollExtent, position.maxScrollExtent)
+                .toDouble();
+        _listScrollController.jumpTo(target);
+      }
+    }
+    widget.controller.selectEntry(entry.id);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_ensureSelectionVisible(entry.id));
+    });
+  }
+
+  Future<void> _ensureSelectionVisible(String id) async {
+    final rowContext = _rowKeys[id]?.currentContext;
+    if (rowContext != null) {
+      await Scrollable.ensureVisible(
+        rowContext,
+        duration: const Duration(milliseconds: 100),
+        alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+      );
+    }
+  }
+
   void _moveSelection(int offset) {
     final entries = _state.visibleEntries;
     if (entries.isEmpty) return;
@@ -116,13 +193,22 @@ final class _LibraryScreenState extends State<LibraryScreen> {
       0,
       entries.length - 1,
     );
-    widget.controller.selectEntry(entries[next].id);
+    _selectAndReveal(next);
   }
 
   void _selectBoundary(bool last) {
     final entries = _state.visibleEntries;
     if (entries.isEmpty) return;
-    widget.controller.selectEntry(last ? entries.last.id : entries.first.id);
+    _selectAndReveal(last ? entries.length - 1 : 0);
+  }
+
+  void _focusSearch() {
+    if (_showNarrowDetail) {
+      setState(() => _showNarrowDetail = false);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocus.requestFocus();
+    });
   }
 
   Future<void> _deleteSelected() async {
@@ -142,15 +228,13 @@ final class _LibraryScreenState extends State<LibraryScreen> {
           const CreateLibraryEntryIntent(),
       const SingleActivator(LogicalKeyboardKey.keyE, meta: true):
           const EditLibraryEntryIntent(),
-      const SingleActivator(LogicalKeyboardKey.keyN, control: true):
-          const CreateLibraryEntryIntent(),
     };
     return Shortcuts(
       shortcuts: shortcuts,
       child: Actions(
         actions: {
           FocusLibrarySearchIntent: CallbackAction<FocusLibrarySearchIntent>(
-            onInvoke: (_) => _searchFocus.requestFocus(),
+            onInvoke: (_) => _focusSearch(),
           ),
           CreateLibraryEntryIntent: CallbackAction<CreateLibraryEntryIntent>(
             onInvoke: (_) =>
@@ -216,6 +300,7 @@ final class _LibraryScreenState extends State<LibraryScreen> {
                         filter: _state.filter,
                         onScope: widget.controller.setFilterScope,
                         onCategory: widget.controller.setCategoryFilter,
+                        onTags: widget.controller.setTagFilter,
                         onManageTaxonomy: () => showTaxonomyDialog(
                           context,
                           controller: widget.controller,
@@ -257,6 +342,12 @@ final class _LibraryScreenState extends State<LibraryScreen> {
                   ),
                 ),
               ),
+              if (MediaQuery.sizeOf(context).width < 1040)
+                IconButton(
+                  tooltip: 'Library navigation',
+                  onPressed: _showLibraryNavigation,
+                  icon: const Icon(Icons.menu),
+                ),
               IconButton(
                 tooltip: 'New prompt',
                 onPressed: () => showEntryEditorDialog(
@@ -338,6 +429,8 @@ final class _LibraryScreenState extends State<LibraryScreen> {
                         }
                       },
                       focusNode: _listFocus,
+                      scrollController: _listScrollController,
+                      rowKeyFor: _rowKeyFor,
                     ),
                   ),
                 ),
@@ -370,28 +463,38 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     if (entry == null) {
       return const Center(child: Text('Select a prompt'));
     }
+    bool active(LibraryMutationKind kind) =>
+        _state.isMutationActive(LibraryMutationKey(kind, entityId: entry.id));
     return LibraryDetail(
       entry: entry,
       snapshot: snapshot,
       onCopy: _copySelected,
-      onEdit: () => showEntryEditorDialog(
-        context,
-        controller: widget.controller,
-        entry: entry,
-      ),
-      onFavorite: () => _runMutation(
-        () => widget.controller.setFavorite(
-          entry.id,
-          isFavorite: !entry.isFavorite,
-        ),
-      ),
-      onArchive: () => _runMutation(
-        () => widget.controller.setArchived(
-          entry.id,
-          isArchived: !entry.isArchived,
-        ),
-      ),
-      onDelete: _deleteSelected,
+      onEdit: active(LibraryMutationKind.updateEntry)
+          ? null
+          : () => showEntryEditorDialog(
+              context,
+              controller: widget.controller,
+              entry: entry,
+            ),
+      onFavorite: active(LibraryMutationKind.setFavorite)
+          ? null
+          : () => _runMutation(
+              () => widget.controller.setFavorite(
+                entry.id,
+                isFavorite: !entry.isFavorite,
+              ),
+            ),
+      onArchive: active(LibraryMutationKind.setArchived)
+          ? null
+          : () => _runMutation(
+              () => widget.controller.setArchived(
+                entry.id,
+                isArchived: !entry.isArchived,
+              ),
+            ),
+      onDelete: active(LibraryMutationKind.deleteEntry)
+          ? null
+          : _deleteSelected,
     );
   }
 }

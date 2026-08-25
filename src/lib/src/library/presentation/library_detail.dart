@@ -28,10 +28,10 @@ final class LibraryDetail extends StatelessWidget {
 
   /// Action callbacks.
   final VoidCallback onCopy;
-  final VoidCallback onEdit;
-  final VoidCallback onFavorite;
-  final VoidCallback onArchive;
-  final VoidCallback onDelete;
+  final VoidCallback? onEdit;
+  final VoidCallback? onFavorite;
+  final VoidCallback? onArchive;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {

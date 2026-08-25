@@ -14,6 +14,7 @@ final class LibrarySidebar extends StatelessWidget {
     required this.filter,
     required this.onScope,
     required this.onCategory,
+    required this.onTags,
     required this.onManageTaxonomy,
     super.key,
   });
@@ -22,6 +23,7 @@ final class LibrarySidebar extends StatelessWidget {
   final LibraryFilter filter;
   final ValueChanged<LibraryFilterScope> onScope;
   final ValueChanged<String?> onCategory;
+  final ValueChanged<List<String>> onTags;
   final VoidCallback onManageTaxonomy;
 
   @override
@@ -85,6 +87,33 @@ final class LibrarySidebar extends StatelessWidget {
               selected: filter.categoryId == category.id,
               title: Text(category.name, overflow: TextOverflow.ellipsis),
               onTap: () => onCategory(category.id),
+            ),
+          const Divider(height: 28),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Text('TAGS', style: Theme.of(context).textTheme.labelSmall),
+          ),
+          ListTile(
+            dense: true,
+            selected: filter.tagIds.isEmpty,
+            title: const Text('All tags'),
+            onTap: () => onTags(const []),
+          ),
+          for (final tag in snapshot.tags)
+            ListTile(
+              dense: true,
+              selected: filter.tagIds.contains(tag.id),
+              title: Text(tag.name, overflow: TextOverflow.ellipsis),
+              trailing: filter.tagIds.contains(tag.id)
+                  ? const Icon(Icons.check, size: 18)
+                  : null,
+              onTap: () {
+                final tagIds = filter.tagIds.toSet();
+                tagIds.contains(tag.id)
+                    ? tagIds.remove(tag.id)
+                    : tagIds.add(tag.id);
+                onTags(tagIds.toList()..sort());
+              },
             ),
         ],
       ),

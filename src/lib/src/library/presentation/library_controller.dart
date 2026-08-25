@@ -40,6 +40,9 @@ final class LibraryController {
   /// Returns current state.
   LibraryState get state => _state;
 
+  /// Whether lifecycle teardown has started.
+  bool get isDisposed => _isDisposed;
+
   /// Publishes future states.
   Stream<LibraryState> get states => _statesController.stream;
 
