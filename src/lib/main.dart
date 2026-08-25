@@ -3,9 +3,9 @@ library;
 
 import 'package:flutter/widgets.dart';
 
-import 'package:prompt_library/src/app/prompt_library_app.dart';
+import 'package:prompt_library/src/app/composition_root.dart';
 
 /// Starts the application.
 void main() {
-  runApp(const PromptLibraryApp());
+  runApp(const PromptLibraryCompositionRoot());
 }

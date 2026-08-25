@@ -293,6 +293,7 @@ final class LibraryController {
       if (!_isDisposed) {
         _emit(_state.withFailure(failure));
       }
+      rethrow;
     } finally {
       _inFlightMutations.remove(key);
       if (!_isDisposed) {

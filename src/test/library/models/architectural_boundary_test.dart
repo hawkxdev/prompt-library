@@ -187,6 +187,37 @@ void main() {
       }
     });
 
+    group('Stage 4 widget boundaries', () {
+      const widgetFiles = [
+        'lib/src/library/presentation/delete_entry_dialog.dart',
+        'lib/src/library/presentation/entry_editor_dialog.dart',
+        'lib/src/library/presentation/library_clipboard.dart',
+        'lib/src/library/presentation/library_detail.dart',
+        'lib/src/library/presentation/library_failure_message.dart',
+        'lib/src/library/presentation/library_list.dart',
+        'lib/src/library/presentation/library_screen.dart',
+        'lib/src/library/presentation/library_shortcuts.dart',
+        'lib/src/library/presentation/library_sidebar.dart',
+        'lib/src/library/presentation/taxonomy_dialog.dart',
+      ];
+
+      test('probe examines Stage 4 production widgets', () {
+        expect(widgetFiles, hasLength(10));
+      });
+
+      for (final relativePath in widgetFiles) {
+        test('$relativePath exists without concrete data imports', () {
+          final file = File('${appRoot.path}/$relativePath');
+          expect(file.existsSync(), isTrue);
+          final content = file.readAsStringSync();
+          expect(content, isNot(contains('package:drift')));
+          expect(content, isNot(contains('dart:io')));
+          expect(content, isNot(contains('drift_library_repository.dart')));
+          expect(content, isNot(contains('library_database.dart')));
+        });
+      }
+    });
+
     // === Compile time API contracts ===
     group('Compile-time API contracts', () {
       test('fake satisfies LibraryRepository interface', () {

@@ -228,7 +228,10 @@ void main() {
       );
       repository.failNext('deleteEntry:entry-1', failure);
 
-      await controller.deleteEntry('entry-1');
+      await expectLater(
+        controller.deleteEntry('entry-1'),
+        throwsA(same(failure)),
+      );
 
       expect(controller.state.snapshot?.entries, [entry]);
       expect(controller.state.visibleEntries, [entry]);
