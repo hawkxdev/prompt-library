@@ -14,6 +14,8 @@ import 'package:prompt_library/src/library/presentation/library_controller.dart'
 import '../../support/library_test_support.dart';
 
 void main() {
+  // === Draft ownership ===
+
   testWidgets('preserves exact body and retains draft on typed failure', (
     tester,
   ) async {
@@ -70,6 +72,92 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(seconds: 1));
   });
+
+  // === Adaptive dialog layout ===
+
+  testWidgets('keeps a full body height on a tall surface', (tester) async {
+    tester.view.physicalSize = const Size(1000, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final repository = TestLibraryRepository();
+    final controller = LibraryController(repository: repository);
+    addTearDown(() async {
+      await controller.dispose();
+      await repository.close();
+    });
+    repository.emit(const LibrarySnapshot.empty());
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () =>
+                showEntryEditorDialog(context, controller: controller),
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pump(const Duration(milliseconds: 400));
+
+    final body = tester.widget<TextField>(find.byKey(const Key('editor-body')));
+    expect(body.minLines, 7);
+    expect(body.maxLines, 14);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('fits body and tag chips at compact height', (tester) async {
+    tester.view.physicalSize = const Size(1000, 620);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final repository = TestLibraryRepository();
+    final controller = LibraryController(repository: repository);
+    addTearDown(() async {
+      await controller.dispose();
+      await repository.close();
+    });
+    repository.emit(LibrarySnapshot(tags: [testTag('tag-1', 'Tag A')]));
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () =>
+                showEntryEditorDialog(context, controller: controller),
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pump(const Duration(milliseconds: 400));
+
+    final body = tester.widget<TextField>(find.byKey(const Key('editor-body')));
+    expect(body.minLines, lessThanOrEqualTo(4));
+    expect(body.maxLines, lessThanOrEqualTo(8));
+
+    await tester.drag(
+      find.byKey(const Key('editor-content')),
+      const Offset(0, -600),
+    );
+    await tester.pump();
+
+    final content = tester.getRect(find.byKey(const Key('editor-content')));
+    final chip = tester.getRect(find.widgetWithText(FilterChip, 'Tag A'));
+    expect(chip.bottom, lessThanOrEqualTo(content.bottom - 8));
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  // === Mutation guards ===
 
   testWidgets('disables save for an active create mutation', (tester) async {
     final repository = TestLibraryRepository();

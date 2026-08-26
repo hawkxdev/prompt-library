@@ -120,18 +120,23 @@ final class _EntryEditorDialogState extends State<_EntryEditorDialog> {
     }
   }
 
+  /// Builds draft fields, taxonomy assignment and actions.
   @override
   Widget build(BuildContext context) {
     final snapshot = _state.snapshot;
     final isSaving = _isSaving || _state.isMutationActive(_mutationKey);
+    final compact = MediaQuery.sizeOf(context).height < 720;
     return AlertDialog(
       title: Text(widget.entry == null ? 'New prompt' : 'Edit prompt'),
       content: SizedBox(
         width: 620,
         child: SingleChildScrollView(
+          key: const Key('editor-content'),
+          padding: const EdgeInsets.only(top: 14, bottom: 16),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Draft fields
               TextField(
                 key: const Key('editor-title'),
                 controller: _title,
@@ -142,8 +147,8 @@ final class _EntryEditorDialogState extends State<_EntryEditorDialog> {
               TextField(
                 key: const Key('editor-body'),
                 controller: _body,
-                minLines: 7,
-                maxLines: 14,
+                minLines: compact ? 4 : 7,
+                maxLines: compact ? 8 : 14,
                 decoration: const InputDecoration(labelText: 'Body'),
               ),
               const SizedBox(height: 12),

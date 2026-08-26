@@ -97,23 +97,32 @@ final class LibraryDetail extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 18),
+            // Body text sheet
             Expanded(
-              child: DecoratedBox(
-                decoration: const BoxDecoration(
-                  border: Border(
-                    left: BorderSide(color: Color(0xFF315E9E), width: 4),
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: DecoratedBox(
+                  key: const Key('detail-text-sheet'),
+                  decoration: const BoxDecoration(
+                    border: Border(
+                      left: BorderSide(color: Color(0xFF315E9E), width: 4),
+                    ),
                   ),
-                ),
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.only(left: 18, right: 8),
-                  child: SelectableText(
-                    entry.body,
-                    style: const TextStyle(fontSize: 14, height: 1.55),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.only(left: 18, right: 8),
+                      child: SelectableText(
+                        entry.body,
+                        style: const TextStyle(fontSize: 14, height: 1.55),
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
             const SizedBox(height: 16),
+            // Edit and copy actions
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [

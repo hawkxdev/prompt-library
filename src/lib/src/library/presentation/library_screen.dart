@@ -196,21 +196,27 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     _selectAndReveal(next);
   }
 
+  /// Selects the first or last entry.
   void _selectBoundary(bool last) {
     final entries = _state.visibleEntries;
     if (entries.isEmpty) return;
     _selectAndReveal(last ? entries.length - 1 : 0);
   }
 
+  /// Focuses search immediately, deferring only until a narrow surface
+  /// mounts the field.
   void _focusSearch() {
     if (_showNarrowDetail) {
       setState(() => _showNarrowDetail = false);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _searchFocus.requestFocus();
+      });
+      return;
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _searchFocus.requestFocus();
-    });
+    _searchFocus.requestFocus();
   }
 
+  /// Deletes the selected entry after confirmation.
   Future<void> _deleteSelected() async {
     final entry = _selectedEntry;
     if (entry == null) return;

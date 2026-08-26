@@ -47,9 +47,8 @@ final class LibraryList extends StatelessWidget {
           decoration: BoxDecoration(
             border: Border.all(
               color: focusNode.hasFocus
-                  ? const Color(0xFF315E9E)
+                  ? const Color(0x8A315E9E)
                   : Colors.transparent,
-              width: 2,
             ),
           ),
           child: child,

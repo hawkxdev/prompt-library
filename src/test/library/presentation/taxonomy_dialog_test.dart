@@ -17,6 +17,89 @@ void main() {
     return tester.widget<IconButton>(find.widgetWithIcon(IconButton, icon));
   }
 
+  // === Category ordering ===
+
+  testWidgets('shows one desktop drag handle per category', (tester) async {
+    final repository = TestLibraryRepository();
+    final controller = LibraryController(repository: repository);
+    addTearDown(() async {
+      await controller.dispose();
+      await repository.close();
+    });
+    repository.emit(
+      LibrarySnapshot(categories: [testCategory('category-1', 'Alpha')]),
+    );
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(platform: TargetPlatform.macOS),
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () =>
+                showTaxonomyDialog(context, controller: controller),
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.byType(ReorderableDragStartListener), findsOneWidget);
+    expect(find.byIcon(Icons.drag_handle), findsOneWidget);
+    expect(find.byTooltip('Move Alpha up'), findsOneWidget);
+    expect(find.byTooltip('Move Alpha down'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, 'Close'));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('moves a category down with keyboard control', (tester) async {
+    final repository = TestLibraryRepository();
+    final controller = LibraryController(repository: repository);
+    addTearDown(() async {
+      await controller.dispose();
+      await repository.close();
+    });
+    repository.emit(
+      LibrarySnapshot(
+        categories: [
+          testCategory('category-1', 'Category A'),
+          testCategory('category-2', 'Category B', sortOrder: 1),
+        ],
+      ),
+    );
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () =>
+                showTaxonomyDialog(context, controller: controller),
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Move Category A down'));
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pump();
+
+    expect(
+      controller.state.snapshot?.categories.map((category) => category.id),
+      ['category-2', 'category-1'],
+    );
+  });
+
+  // === Taxonomy drafts ===
+
   testWidgets('renames category through explicit edit action', (tester) async {
     final repository = TestLibraryRepository();
     final controller = LibraryController(repository: repository);
@@ -145,6 +228,8 @@ void main() {
     );
   });
 
+  // === Mutation guards ===
+
   testWidgets('disables only an active category create', (tester) async {
     final repository = TestLibraryRepository();
     final controller = LibraryController(repository: repository);
@@ -211,46 +296,5 @@ void main() {
     expect(actionButton(tester, Icons.delete_outline).onPressed, isNotNull);
     gate.complete();
     await pending;
-  });
-
-  testWidgets('moves a category down with keyboard control', (tester) async {
-    final repository = TestLibraryRepository();
-    final controller = LibraryController(repository: repository);
-    addTearDown(() async {
-      await controller.dispose();
-      await repository.close();
-    });
-    repository.emit(
-      LibrarySnapshot(
-        categories: [
-          testCategory('category-1', 'Category A'),
-          testCategory('category-2', 'Category B', sortOrder: 1),
-        ],
-      ),
-    );
-    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Builder(
-          builder: (context) => TextButton(
-            onPressed: () =>
-                showTaxonomyDialog(context, controller: controller),
-            child: const Text('Open'),
-          ),
-        ),
-      ),
-    );
-    await tester.tap(find.text('Open'));
-    await tester.pump();
-
-    await tester.tap(find.byTooltip('Move Category A down'));
-    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
-    await tester.pump();
-
-    expect(
-      controller.state.snapshot?.categories.map((category) => category.id),
-      ['category-2', 'category-1'],
-    );
   });
 }

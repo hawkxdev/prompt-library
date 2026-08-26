@@ -165,12 +165,14 @@ final class _TaxonomyDialogState extends State<_TaxonomyDialog> {
     );
   }
 
+  /// Builds category creation, ordering and actions.
   Widget _categories(LibrarySnapshot? snapshot) {
     final categories = snapshot?.categories ?? const [];
     final categoryIds = [for (final category in categories) category.id];
     final reorderActive = _active(LibraryMutationKind.reorderCategories);
     return Column(
       children: [
+        const SizedBox(height: 14),
         Row(
           children: [
             Expanded(
@@ -206,7 +208,6 @@ final class _TaxonomyDialogState extends State<_TaxonomyDialog> {
               return ListTile(
                 key: ValueKey(category.id),
                 title: Text(category.name),
-                leading: const Icon(Icons.drag_handle),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -280,10 +281,12 @@ final class _TaxonomyDialogState extends State<_TaxonomyDialog> {
     );
   }
 
+  /// Builds tag creation and actions.
   Widget _tags(LibrarySnapshot? snapshot) {
     final tags = snapshot?.tags ?? const [];
     return Column(
       children: [
+        const SizedBox(height: 14),
         Row(
           children: [
             Expanded(
