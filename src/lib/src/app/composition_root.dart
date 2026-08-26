@@ -53,6 +53,7 @@ final class PromptLibraryComposition {
     return _disposeFuture ??= _dispose();
   }
 
+  /// Disposes the controller before the database.
   Future<void> _dispose() async {
     await controller.dispose();
     await database.close();

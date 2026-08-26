@@ -24,6 +24,7 @@ Future<void> showEntryEditorDialog(
   );
 }
 
+/// Create or edit surface.
 final class _EntryEditorDialog extends StatefulWidget {
   const _EntryEditorDialog({required this.controller, this.entry});
 
@@ -34,6 +35,7 @@ final class _EntryEditorDialog extends StatefulWidget {
   State<_EntryEditorDialog> createState() => _EntryEditorDialogState();
 }
 
+/// Owns the local draft until persistence succeeds.
 final class _EntryEditorDialogState extends State<_EntryEditorDialog> {
   late final TextEditingController _title;
   late final TextEditingController _body;
@@ -69,6 +71,7 @@ final class _EntryEditorDialogState extends State<_EntryEditorDialog> {
     super.dispose();
   }
 
+  /// Resolves the create or update mutation key.
   LibraryMutationKey get _mutationKey {
     final entry = widget.entry;
     return entry == null
@@ -79,6 +82,7 @@ final class _EntryEditorDialogState extends State<_EntryEditorDialog> {
           );
   }
 
+  /// Validates the draft and persists it.
   Future<void> _save() async {
     if (_state.isMutationActive(_mutationKey)) return;
     if (_title.text.trim().isEmpty) {
@@ -156,6 +160,7 @@ final class _EntryEditorDialogState extends State<_EntryEditorDialog> {
                 controller: _keyword,
                 decoration: const InputDecoration(labelText: 'Keyword'),
               ),
+              // Taxonomy assignment
               if (snapshot != null) ...[
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String?>(
@@ -194,6 +199,7 @@ final class _EntryEditorDialogState extends State<_EntryEditorDialog> {
                   ),
                 ),
               ],
+              // Validation and failure message
               if (_error != null) ...[
                 const SizedBox(height: 12),
                 Align(

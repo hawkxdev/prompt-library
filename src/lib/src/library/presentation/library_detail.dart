@@ -33,6 +33,7 @@ final class LibraryDetail extends StatelessWidget {
   final VoidCallback? onArchive;
   final VoidCallback? onDelete;
 
+  /// Builds the metadata rail, text sheet and actions.
   @override
   Widget build(BuildContext context) {
     final category = entry.categoryId == null
@@ -46,6 +47,7 @@ final class LibraryDetail extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Title and entry actions
             Row(
               children: [
                 Expanded(
@@ -88,6 +90,7 @@ final class LibraryDetail extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
+            // Taxonomy chips
             Wrap(
               spacing: 8,
               runSpacing: 6,

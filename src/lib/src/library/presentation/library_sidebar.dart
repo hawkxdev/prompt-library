@@ -26,6 +26,7 @@ final class LibrarySidebar extends StatelessWidget {
   final ValueChanged<List<String>> onTags;
   final VoidCallback onManageTaxonomy;
 
+  /// Builds scope, category and tag filters.
   @override
   Widget build(BuildContext context) {
     return Material(
@@ -120,6 +121,7 @@ final class LibrarySidebar extends StatelessWidget {
     );
   }
 
+  /// Builds one scope row.
   Widget _scopeTile(String title, IconData icon, LibraryFilterScope scope) {
     return ListTile(
       dense: true,

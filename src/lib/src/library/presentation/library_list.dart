@@ -36,6 +36,7 @@ final class LibraryList extends StatelessWidget {
   /// Resolves stable row keys.
   final GlobalKey Function(String id) rowKeyFor;
 
+  /// Builds the focus outline and selectable rows.
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(

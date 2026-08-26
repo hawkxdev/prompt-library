@@ -38,6 +38,7 @@ final class LibraryScreen extends StatefulWidget {
   State<LibraryScreen> createState() => _LibraryScreenState();
 }
 
+/// Owns screen-local controllers, focus and subscription.
 final class _LibraryScreenState extends State<LibraryScreen> {
   late LibraryState _state;
   late final StreamSubscription<LibraryState> _subscription;
@@ -70,6 +71,7 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     super.dispose();
   }
 
+  /// Resolves the selected entry from visible results.
   Entry? get _selectedEntry {
     final id = _state.selectedEntryId;
     if (id == null) return null;
@@ -79,6 +81,7 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     return null;
   }
 
+  /// Copies the selected body and reports the outcome.
   Future<void> _copySelected() async {
     final entry = _selectedEntry;
     if (entry == null) return;
@@ -95,6 +98,7 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     if (mounted) _showMessage('Copied');
   }
 
+  /// Runs a mutation and leaves typed failures to the retained banner.
   Future<void> _runMutation(Future<void> Function() operation) async {
     try {
       await operation();
@@ -103,12 +107,14 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     }
   }
 
+  /// Shows a transient message.
   void _showMessage(String message) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
+  /// Opens navigation for compact surfaces.
   Future<void> _showLibraryNavigation() {
     return showDialog<void>(
       context: context,
@@ -146,10 +152,12 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
+  /// Resolves a stable row key.
   GlobalKey _rowKeyFor(String id) {
     return _rowKeys.putIfAbsent(id, () => GlobalKey(debugLabel: 'entry-$id'));
   }
 
+  /// Selects an entry and keeps it visible.
   void _selectAndReveal(int index) {
     final entry = _state.visibleEntries[index];
     if (_listScrollController.hasClients) {
@@ -172,6 +180,7 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     });
   }
 
+  /// Scrolls the selected row into view.
   Future<void> _ensureSelectionVisible(String id) async {
     final rowContext = _rowKeys[id]?.currentContext;
     if (rowContext != null) {
@@ -183,6 +192,7 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     }
   }
 
+  /// Moves selection by one step.
   void _moveSelection(int offset) {
     final entries = _state.visibleEntries;
     if (entries.isEmpty) return;
@@ -225,6 +235,7 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     }
   }
 
+  /// Builds application shortcuts, actions and the screen body.
   @override
   Widget build(BuildContext context) {
     final shortcuts = <ShortcutActivator, Intent>{
@@ -268,6 +279,7 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
+  /// Builds the observable library state surface.
   Widget _buildBody() {
     if (_state.loadStatus == LibraryLoadStatus.loading &&
         !_state.hasUsableSnapshot) {
@@ -281,6 +293,7 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     if (snapshot == null) return const SizedBox.shrink();
     return Column(
       children: [
+        // Non-blocking failure banner
         if (_state.failure != null)
           MaterialBanner(
             content: Text(messageForLibraryFailure(_state.failure!)),
@@ -291,6 +304,7 @@ final class _LibraryScreenState extends State<LibraryScreen> {
               ),
             ],
           ),
+        // Adaptive panes
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {
@@ -328,9 +342,11 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
+  /// Builds search, filters and the result list.
   Widget _resultPane(LibrarySnapshot snapshot) {
     return Column(
       children: [
+        // Search and pane actions
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
           child: Row(
@@ -384,6 +400,7 @@ final class _LibraryScreenState extends State<LibraryScreen> {
             ],
           ),
         ),
+        // Result list or empty state
         Expanded(
           child: _state.visibleEntries.isEmpty
               ? _EmptyState(
@@ -445,6 +462,7 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
+  /// Builds the narrow list or detail surface.
   Widget _narrowPane(LibrarySnapshot snapshot) {
     if (!_showNarrowDetail || _selectedEntry == null) {
       return _resultPane(snapshot);
@@ -464,6 +482,7 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
+  /// Builds the detail pane for the current selection.
   Widget _detailPane(LibrarySnapshot snapshot) {
     final entry = _selectedEntry;
     if (entry == null) {
@@ -505,12 +524,14 @@ final class _LibraryScreenState extends State<LibraryScreen> {
   }
 }
 
+/// Empty result placeholder.
 final class _EmptyState extends StatelessWidget {
   const _EmptyState({required this.filtered, required this.onCreate});
 
   final bool filtered;
   final VoidCallback onCreate;
 
+  /// Builds the empty state.
   @override
   Widget build(BuildContext context) {
     return Center(
@@ -533,11 +554,13 @@ final class _EmptyState extends StatelessWidget {
   }
 }
 
+/// Initial load failure surface.
 final class _InitialFailure extends StatelessWidget {
   const _InitialFailure({required this.failure});
 
   final LibraryFailure? failure;
 
+  /// Builds the failure message.
   @override
   Widget build(BuildContext context) {
     return Center(

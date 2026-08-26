@@ -22,6 +22,7 @@ Future<void> showTaxonomyDialog(
   );
 }
 
+/// Category and tag manager.
 final class _TaxonomyDialog extends StatefulWidget {
   const _TaxonomyDialog({required this.controller});
 
@@ -31,6 +32,7 @@ final class _TaxonomyDialog extends StatefulWidget {
   State<_TaxonomyDialog> createState() => _TaxonomyDialogState();
 }
 
+/// Owns taxonomy drafts and the state subscription.
 final class _TaxonomyDialogState extends State<_TaxonomyDialog> {
   late LibraryState _state;
   late final StreamSubscription<LibraryState> _subscription;
@@ -55,6 +57,7 @@ final class _TaxonomyDialogState extends State<_TaxonomyDialog> {
     super.dispose();
   }
 
+  /// Runs a mutation and retains typed failure text.
   Future<bool> _run(Future<void> Function() operation) async {
     try {
       await operation();
@@ -66,6 +69,7 @@ final class _TaxonomyDialogState extends State<_TaxonomyDialog> {
     }
   }
 
+  /// Asks for explicit delete confirmation.
   Future<bool> _confirm(String title, String content) async {
     return await showDialog<bool>(
           context: context,
@@ -87,6 +91,7 @@ final class _TaxonomyDialogState extends State<_TaxonomyDialog> {
         false;
   }
 
+  /// Opens the rename surface.
   Future<void> _rename({
     required String title,
     required String initialValue,
@@ -102,12 +107,14 @@ final class _TaxonomyDialogState extends State<_TaxonomyDialog> {
     );
   }
 
+  /// Reports an active mutation for one key.
   bool _active(LibraryMutationKind kind, {String? entityId}) {
     return _state.isMutationActive(
       LibraryMutationKey(kind, entityId: entityId),
     );
   }
 
+  /// Submits one complete category order.
   void _moveCategory(List<String> categoryIds, int oldIndex, int newIndex) {
     if (_active(LibraryMutationKind.reorderCategories) ||
         oldIndex == newIndex) {
@@ -119,6 +126,7 @@ final class _TaxonomyDialogState extends State<_TaxonomyDialog> {
     unawaited(_run(() => widget.controller.reorderCategories(reordered)));
   }
 
+  /// Builds the tabbed taxonomy surface.
   @override
   Widget build(BuildContext context) {
     final snapshot = _state.snapshot;
@@ -198,6 +206,7 @@ final class _TaxonomyDialogState extends State<_TaxonomyDialog> {
             ),
           ],
         ),
+        // Reorderable category list
         Expanded(
           child: ReorderableListView.builder(
             itemCount: categories.length,
@@ -374,6 +383,7 @@ final class _TaxonomyDialogState extends State<_TaxonomyDialog> {
   }
 }
 
+/// Single-field rename surface.
 final class _RenameTaxonomyDialog extends StatefulWidget {
   const _RenameTaxonomyDialog({
     required this.title,
@@ -389,6 +399,7 @@ final class _RenameTaxonomyDialog extends StatefulWidget {
   State<_RenameTaxonomyDialog> createState() => _RenameTaxonomyDialogState();
 }
 
+/// Owns the rename draft.
 final class _RenameTaxonomyDialogState extends State<_RenameTaxonomyDialog> {
   late final TextEditingController _nameController;
   bool _isSaving = false;
@@ -406,6 +417,7 @@ final class _RenameTaxonomyDialogState extends State<_RenameTaxonomyDialog> {
     super.dispose();
   }
 
+  /// Persists the renamed value.
   Future<void> _save() async {
     final value = _nameController.text.trim();
     if (value.isEmpty) return;
@@ -426,6 +438,7 @@ final class _RenameTaxonomyDialogState extends State<_RenameTaxonomyDialog> {
     }
   }
 
+  /// Builds the rename field and actions.
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
