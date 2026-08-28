@@ -7,7 +7,11 @@ import 'package:prompt_library/src/app/prompt_library_app.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
+import 'package:prompt_library/src/platform/macos/quick_mode_view.dart';
+import 'package:prompt_library/src/platform/macos/quick_panel_controller.dart';
+import 'package:prompt_library/src/platform/macos/unavailable_mac_quick_panel.dart';
 
+import 'platform/macos/quick_panel_widget_test_support.dart';
 import 'support/library_test_support.dart';
 
 void main() {
@@ -25,24 +29,67 @@ void main() {
   });
 
   testWidgets('application shows actionable empty library', (tester) async {
+    final quick = QuickPanelController(
+      libraryController: controller,
+      clipboard: const _NoopClipboard(),
+      port: const UnavailableMacQuickPanel(),
+    );
+    await quick.initialize(QuickPanelWidgetHarness.defaultSpec);
+    repository.emit(const LibrarySnapshot.empty());
     await tester.pumpWidget(
       PromptLibraryApp(
         controller: controller,
         clipboard: const _NoopClipboard(),
+        quickPanelController: quick,
+        quickAccessSupported: false,
       ),
     );
-    repository.emit(const LibrarySnapshot.empty());
-    await tester.runAsync(() async {
-      await Future<void>.delayed(Duration.zero);
-      await Future<void>.delayed(Duration.zero);
-    });
     await tester.pump();
 
     expect(find.text('Your library is empty'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'New prompt'), findsOneWidget);
+    expect(find.byKey(const Key('hotkey-settings')), findsNothing);
 
     await tester.pumpWidget(const SizedBox.shrink());
-    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pump();
+    await tester.pump();
+    await tester.runAsync(quick.dispose);
+  });
+
+  testWidgets('application switches one object graph into quick mode', (
+    tester,
+  ) async {
+    final quickHarness = QuickPanelWidgetHarness();
+    addTearDown(quickHarness.dispose);
+    quickHarness.repository.emit(const LibrarySnapshot.empty());
+    await quickHarness.quick.initialize(QuickPanelWidgetHarness.defaultSpec);
+
+    await tester.pumpWidget(
+      PromptLibraryApp(
+        controller: quickHarness.library,
+        clipboard: quickHarness.clipboard,
+        quickPanelController: quickHarness.quick,
+        quickAccessSupported: true,
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('hotkey-settings')), findsOneWidget);
+    expect(find.byType(QuickModeView), findsNothing);
+
+    await tester.tap(find.byKey(const Key('hotkey-settings')));
+    await tester.pumpAndSettle();
+    expect(find.text('Global shortcut'), findsOneWidget);
+
+    quickHarness.port.emitQuickModeRequest();
+    await tester.pumpAndSettle();
+
+    expect(find.byType(QuickModeView), findsOneWidget);
+    expect(find.byKey(const Key('quick-search')), findsOneWidget);
+    expect(find.text('Global shortcut'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
   });
 }
 

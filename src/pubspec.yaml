@@ -41,6 +41,8 @@ dependencies:
   mcp_toolkit: ^0.3.0
 
 dev_dependencies:
+  integration_test:
+    sdk: flutter
   flutter_test:
     sdk: flutter
 

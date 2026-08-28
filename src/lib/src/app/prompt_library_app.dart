@@ -1,31 +1,95 @@
 /// Application surface.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../library/presentation/library_clipboard.dart';
 import '../library/presentation/library_controller.dart';
 import '../library/presentation/library_screen.dart';
+import '../platform/macos/hotkey_settings_dialog.dart';
+import '../platform/macos/quick_mode_view.dart';
+import '../platform/macos/quick_panel_controller.dart';
+import '../platform/macos/quick_panel_state.dart';
 
-/// Root application widget.
-final class PromptLibraryApp extends StatelessWidget {
+/// Root application widget selecting one shared full or quick surface.
+final class PromptLibraryApp extends StatefulWidget {
   /// Creates application widget.
   const PromptLibraryApp({
     required this.controller,
     required this.clipboard,
+    this.quickPanelController,
+    this.quickAccessSupported = false,
     super.key,
   });
 
   /// Application bar title.
   static const String appTitle = 'Prompt Library';
 
-  /// Application controller.
+  /// Shared application controller.
   final LibraryController controller;
 
-  /// Clipboard boundary.
+  /// Exact clipboard boundary.
   final LibraryClipboard clipboard;
 
-  /// Builds the application.
+  /// Optional quick-workflow controller.
+  final QuickPanelController? quickPanelController;
+
+  /// Whether macOS shortcut settings should be exposed.
+  final bool quickAccessSupported;
+
+  @override
+  State<PromptLibraryApp> createState() => _PromptLibraryAppState();
+}
+
+final class _PromptLibraryAppState extends State<PromptLibraryApp> {
+  QuickPanelState? _quickState;
+  StreamSubscription<QuickPanelState>? _quickSubscription;
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+
+  @override
+  void initState() {
+    super.initState();
+    _bindQuickController();
+  }
+
+  @override
+  void didUpdateWidget(PromptLibraryApp oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(
+      oldWidget.quickPanelController,
+      widget.quickPanelController,
+    )) {
+      unawaited(_quickSubscription?.cancel());
+      _quickSubscription = null;
+      _bindQuickController();
+    }
+  }
+
+  @override
+  void dispose() {
+    unawaited(_quickSubscription?.cancel());
+    super.dispose();
+  }
+
+  void _bindQuickController() {
+    final quick = widget.quickPanelController;
+    _quickState = quick?.state;
+    _quickSubscription = quick?.states.listen((state) {
+      if (!mounted) {
+        return;
+      }
+      final enteringQuick =
+          state.mode == QuickPanelMode.quick &&
+          _quickState?.mode != QuickPanelMode.quick;
+      if (enteringQuick) {
+        _navigatorKey.currentState?.popUntil((route) => route.isFirst);
+      }
+      setState(() => _quickState = state);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     const colorScheme = ColorScheme.light(
@@ -38,7 +102,8 @@ final class PromptLibraryApp extends StatelessWidget {
       error: Color(0xFFB3261E),
     );
     return MaterialApp(
-      title: appTitle,
+      navigatorKey: _navigatorKey,
+      title: PromptLibraryApp.appTitle,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: colorScheme,
@@ -50,7 +115,26 @@ final class PromptLibraryApp extends StatelessWidget {
           ),
         ),
       ),
-      home: LibraryScreen(controller: controller, clipboard: clipboard),
+      home: _buildHome(),
+    );
+  }
+
+  Widget _buildHome() {
+    final quick = widget.quickPanelController;
+    if (quick != null && _quickState?.mode == QuickPanelMode.quick) {
+      return QuickModeView(
+        libraryController: widget.controller,
+        quickPanelController: quick,
+      );
+    }
+    return Builder(
+      builder: (context) => LibraryScreen(
+        controller: widget.controller,
+        clipboard: widget.clipboard,
+        onConfigureHotKey: widget.quickAccessSupported && quick != null
+            ? () => showHotKeySettingsDialog(context, controller: quick)
+            : null,
+      ),
     );
   }
 }

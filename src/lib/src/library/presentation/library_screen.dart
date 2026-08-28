@@ -28,11 +28,18 @@ final class LibraryScreen extends StatefulWidget {
   const LibraryScreen({
     required this.controller,
     required this.clipboard,
+    this.onConfigureHotKey,
     super.key,
   });
 
+  /// Shared application controller.
   final LibraryController controller;
+
+  /// Exact clipboard boundary.
   final LibraryClipboard clipboard;
+
+  /// Optional macOS global-shortcut settings action.
+  final VoidCallback? onConfigureHotKey;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -378,6 +385,13 @@ final class _LibraryScreenState extends State<LibraryScreen> {
                 ),
                 icon: const Icon(Icons.add),
               ),
+              if (widget.onConfigureHotKey != null)
+                IconButton(
+                  key: const Key('hotkey-settings'),
+                  tooltip: 'Global shortcut',
+                  onPressed: widget.onConfigureHotKey,
+                  icon: const Icon(Icons.keyboard),
+                ),
               if (MediaQuery.sizeOf(context).width < 1040)
                 PopupMenuButton<LibraryFilterScope>(
                   tooltip: 'Library scope',
