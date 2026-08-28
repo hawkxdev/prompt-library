@@ -78,8 +78,11 @@ final class PromptLibraryLifecycle {
 
 /// Creates and owns production dependencies.
 final class PromptLibraryCompositionRoot extends StatefulWidget {
-  /// Creates production root.
-  const PromptLibraryCompositionRoot({super.key});
+  /// Creates application root.
+  const PromptLibraryCompositionRoot({super.key, this.composition});
+
+  /// Optional injected composition.
+  final PromptLibraryComposition? composition;
 
   @override
   State<PromptLibraryCompositionRoot> createState() =>
@@ -95,7 +98,7 @@ final class _PromptLibraryCompositionRootState
   @override
   void initState() {
     super.initState();
-    _composition = PromptLibraryComposition.production();
+    _composition = widget.composition ?? PromptLibraryComposition.production();
     _lifecycle = PromptLibraryLifecycle(_composition.dispose);
     _lifecycleListener = AppLifecycleListener(
       onExitRequested: _lifecycle.requestExit,
