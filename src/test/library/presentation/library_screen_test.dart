@@ -6,6 +6,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:prompt_library/src/app/application_surface.dart';
 import 'package:prompt_library/src/app/prompt_library_app.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
@@ -32,7 +33,11 @@ void main() {
 
   Future<void> pumpApp(WidgetTester tester) async {
     await tester.pumpWidget(
-      PromptLibraryApp(controller: controller, clipboard: clipboard),
+      PromptLibraryApp(
+        applicationSurface: ApplicationSurface.desktop,
+        controller: controller,
+        clipboard: clipboard,
+      ),
     );
   }
 

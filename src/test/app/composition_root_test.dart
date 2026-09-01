@@ -5,6 +5,7 @@ import 'dart:ui' show AppExitResponse;
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:prompt_library/src/app/application_surface.dart';
 import 'package:prompt_library/src/app/composition_root.dart';
 import 'package:prompt_library/src/library/data/drift_library_repository.dart';
 import 'package:prompt_library/src/library/data/library_database.dart';
@@ -17,16 +18,27 @@ import 'package:prompt_library/src/platform/macos/unavailable_mac_quick_panel.da
 import 'package:prompt_library/src/platform/macos/quick_panel_controller.dart';
 
 void main() {
+  test('selects mobile application surface for iOS', () {
+    expect(selectApplicationSurface(isIOS: true), ApplicationSurface.mobile);
+  });
+
+  test('selects desktop application surface for non-iOS', () {
+    expect(selectApplicationSurface(isIOS: false), ApplicationSurface.desktop);
+  });
+
   test('wires real Drift and disposes controller before database', () async {
     final database = LibraryDatabase.forTesting(NativeDatabase.memory());
     final repository = DriftLibraryRepository(database);
     final controller = LibraryController(repository: repository);
     final composition = PromptLibraryComposition(
+      applicationSurface: ApplicationSurface.desktop,
       database: database,
       repository: repository,
       controller: controller,
       clipboard: const _NoopClipboard(),
     );
+
+    expect(composition.applicationSurface, ApplicationSurface.desktop);
 
     await controller.createEntry(
       EntryInput.validate(title: 'Title', body: 'Body'),
@@ -60,6 +72,7 @@ void main() {
         port: port,
       );
       final composition = PromptLibraryComposition(
+        applicationSurface: ApplicationSurface.desktop,
         database: database,
         repository: repository,
         controller: controller,
@@ -67,6 +80,8 @@ void main() {
         quickPanelController: quick,
         quickAccessSupported: true,
       );
+
+      expect(composition.applicationSurface, ApplicationSurface.desktop);
 
       await composition.start();
       await composition.start();
@@ -128,6 +143,16 @@ void main() {
 
     await macOS.dispose();
     await unavailable.dispose();
+  });
+
+  test('keeps iOS surface independent from macOS quick access', () async {
+    final surface = selectApplicationSurface(isIOS: true);
+    final port = PromptLibraryComposition.createPlatformPort(isMacOS: false);
+
+    expect(surface, ApplicationSurface.mobile);
+    expect(port, isA<UnavailableMacQuickPanel>());
+
+    await port.dispose();
   });
 
   test('does not dispose while voting on an exit request', () async {

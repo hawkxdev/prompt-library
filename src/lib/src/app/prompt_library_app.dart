@@ -12,11 +12,13 @@ import '../platform/macos/hotkey_settings_dialog.dart';
 import '../platform/macos/quick_mode_view.dart';
 import '../platform/macos/quick_panel_controller.dart';
 import '../platform/macos/quick_panel_state.dart';
+import 'application_surface.dart';
 
 /// Root application widget selecting one shared full or quick surface.
 final class PromptLibraryApp extends StatefulWidget {
   /// Creates application widget.
   const PromptLibraryApp({
+    required this.applicationSurface,
     required this.controller,
     required this.clipboard,
     this.quickPanelController,
@@ -26,6 +28,9 @@ final class PromptLibraryApp extends StatefulWidget {
 
   /// Application bar title.
   static const String appTitle = 'Prompt Library';
+
+  /// Normal application surface.
+  final ApplicationSurface applicationSurface;
 
   /// Shared application controller.
   final LibraryController controller;
@@ -127,6 +132,15 @@ final class _PromptLibraryAppState extends State<PromptLibraryApp> {
         quickPanelController: quick,
       );
     }
+    return switch (widget.applicationSurface) {
+      ApplicationSurface.desktop => _buildFullLibrary(),
+      ApplicationSurface.mobile => _buildFullLibrary(),
+    };
+  }
+
+  /// Builds full library surface.
+  Widget _buildFullLibrary() {
+    final quick = widget.quickPanelController;
     return Builder(
       builder: (context) => LibraryScreen(
         controller: widget.controller,

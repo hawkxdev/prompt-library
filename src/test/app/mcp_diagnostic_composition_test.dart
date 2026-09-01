@@ -3,6 +3,7 @@ library;
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:prompt_library/src/app/application_surface.dart';
 import 'package:prompt_library/src/app/mcp_diagnostic_composition.dart';
 import 'package:prompt_library/src/library/data/library_database.dart';
 import 'package:prompt_library/src/library/models/library_failure.dart';
@@ -11,6 +12,7 @@ void main() {
   test('uses isolated synthetic data for MCP diagnostics', () async {
     final composition = await createMcpDiagnosticComposition();
     addTearDown(composition.dispose);
+    expect(composition.applicationSurface, ApplicationSurface.desktop);
     final databaseInfo = await composition.database
         .customSelect('PRAGMA database_list')
         .getSingle();

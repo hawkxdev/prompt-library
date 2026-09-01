@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:prompt_library/src/app/application_surface.dart';
 import 'package:prompt_library/src/app/prompt_library_app.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
@@ -28,33 +29,37 @@ void main() {
     await repository.close();
   });
 
-  testWidgets('application shows actionable empty library', (tester) async {
-    final quick = QuickPanelController(
-      libraryController: controller,
-      clipboard: const _NoopClipboard(),
-      port: const UnavailableMacQuickPanel(),
-    );
-    await quick.initialize(QuickPanelWidgetHarness.defaultSpec);
-    repository.emit(const LibrarySnapshot.empty());
-    await tester.pumpWidget(
-      PromptLibraryApp(
-        controller: controller,
+  for (final applicationSurface in ApplicationSurface.values) {
+    testWidgets('application shows actionable empty library on '
+        '${applicationSurface.name}', (tester) async {
+      final quick = QuickPanelController(
+        libraryController: controller,
         clipboard: const _NoopClipboard(),
-        quickPanelController: quick,
-        quickAccessSupported: false,
-      ),
-    );
-    await tester.pump();
+        port: const UnavailableMacQuickPanel(),
+      );
+      await quick.initialize(QuickPanelWidgetHarness.defaultSpec);
+      repository.emit(const LibrarySnapshot.empty());
+      await tester.pumpWidget(
+        PromptLibraryApp(
+          applicationSurface: applicationSurface,
+          controller: controller,
+          clipboard: const _NoopClipboard(),
+          quickPanelController: quick,
+          quickAccessSupported: false,
+        ),
+      );
+      await tester.pump();
 
-    expect(find.text('Your library is empty'), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'New prompt'), findsOneWidget);
-    expect(find.byKey(const Key('hotkey-settings')), findsNothing);
+      expect(find.text('Your library is empty'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'New prompt'), findsOneWidget);
+      expect(find.byKey(const Key('hotkey-settings')), findsNothing);
 
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
-    await tester.pump();
-    await tester.runAsync(quick.dispose);
-  });
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      await tester.pump();
+      await tester.runAsync(quick.dispose);
+    });
+  }
 
   testWidgets('application switches one object graph into quick mode', (
     tester,
@@ -66,6 +71,7 @@ void main() {
 
     await tester.pumpWidget(
       PromptLibraryApp(
+        applicationSurface: ApplicationSurface.mobile,
         controller: quickHarness.library,
         clipboard: quickHarness.clipboard,
         quickPanelController: quickHarness.quick,

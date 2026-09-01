@@ -8,6 +8,7 @@ import '../library/data/library_database.dart';
 import '../library/models/entry_input.dart';
 import '../library/presentation/library_clipboard.dart';
 import '../library/presentation/library_controller.dart';
+import 'application_surface.dart';
 import 'composition_root.dart';
 
 /// Creates isolated diagnostic composition.
@@ -56,6 +57,7 @@ Future<PromptLibraryComposition> createMcpDiagnosticComposition({
     );
 
     return PromptLibraryComposition(
+      applicationSurface: ApplicationSurface.desktop,
       database: diagnosticDatabase,
       repository: repository,
       controller: LibraryController(repository: repository),

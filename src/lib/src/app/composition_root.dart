@@ -16,12 +16,19 @@ import '../platform/macos/mac_quick_panel_port.dart';
 import '../platform/macos/method_channel_mac_quick_panel.dart';
 import '../platform/macos/quick_panel_controller.dart';
 import '../platform/macos/unavailable_mac_quick_panel.dart';
+import 'application_surface.dart';
 import 'prompt_library_app.dart';
+
+/// Selects the application surface for the current target.
+ApplicationSurface selectApplicationSurface({required bool isIOS}) {
+  return isIOS ? ApplicationSurface.mobile : ApplicationSurface.desktop;
+}
 
 /// Owns the complete application object graph.
 final class PromptLibraryComposition {
   /// Creates an explicit composition.
   PromptLibraryComposition({
+    required this.applicationSurface,
     required this.database,
     required this.repository,
     required this.controller,
@@ -42,6 +49,7 @@ final class PromptLibraryComposition {
     final repository = DriftLibraryRepository(database);
     final controller = LibraryController(repository: repository);
     final clipboard = FlutterLibraryClipboard();
+    final applicationSurface = selectApplicationSurface(isIOS: Platform.isIOS);
     final port = createPlatformPort(isMacOS: Platform.isMacOS);
     final quickPanelController = QuickPanelController(
       libraryController: controller,
@@ -49,6 +57,7 @@ final class PromptLibraryComposition {
       port: port,
     );
     return PromptLibraryComposition(
+      applicationSurface: applicationSurface,
       database: database,
       repository: repository,
       controller: controller,
@@ -68,6 +77,9 @@ final class PromptLibraryComposition {
         ? MethodChannelMacQuickPanel(messenger: messenger)
         : const UnavailableMacQuickPanel();
   }
+
+  /// Normal application surface.
+  final ApplicationSurface applicationSurface;
 
   /// Production database.
   final LibraryDatabase database;
@@ -183,6 +195,7 @@ final class _PromptLibraryCompositionRootState
   @override
   Widget build(BuildContext context) {
     return PromptLibraryApp(
+      applicationSurface: _composition.applicationSurface,
       controller: _composition.controller,
       clipboard: _composition.clipboard,
       quickPanelController: _composition.quickPanelController,
