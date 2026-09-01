@@ -76,7 +76,7 @@ Directory _findAppRoot() {
       File('${dir.path}/lib/src/library/models/entry.dart').existsSync()) {
     return dir;
   }
-  final sub = Directory('${dir.path}/apps/prompt_library');
+  final sub = Directory('${dir.path}/app');
   if (sub.existsSync() && File('${sub.path}/pubspec.yaml').existsSync()) {
     return sub;
   }
