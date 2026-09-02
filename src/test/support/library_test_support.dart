@@ -33,6 +33,11 @@ final class TestLibraryRepository implements LibraryRepository {
     _snapshots.add(snapshot);
   }
 
+  /// Emits a typed failure on the snapshot stream.
+  void emitFailure(LibraryFailure failure) {
+    _snapshots.addError(failure);
+  }
+
   /// Closes stream resources.
   Future<void> close() => _snapshots.close();
 
@@ -273,6 +278,7 @@ Entry testEntry(
   Iterable<String> tagIds = const [],
   bool isFavorite = false,
   bool isArchived = false,
+  DateTime? lastCopiedAt,
 }) {
   return Entry(
     id: id,
@@ -284,6 +290,7 @@ Entry testEntry(
     isArchived: isArchived,
     createdAt: DateTime.utc(2026),
     updatedAt: DateTime.utc(2026),
+    lastCopiedAt: lastCopiedAt,
   );
 }
 

@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import '../library/presentation/library_clipboard.dart';
 import '../library/presentation/library_controller.dart';
 import '../library/presentation/library_screen.dart';
+import '../library/presentation/mobile/mobile_library_screen.dart';
 import '../platform/macos/hotkey_settings_dialog.dart';
 import '../platform/macos/quick_mode_view.dart';
 import '../platform/macos/quick_panel_controller.dart';
@@ -134,8 +135,16 @@ final class _PromptLibraryAppState extends State<PromptLibraryApp> {
     }
     return switch (widget.applicationSurface) {
       ApplicationSurface.desktop => _buildFullLibrary(),
-      ApplicationSurface.mobile => _buildFullLibrary(),
+      ApplicationSurface.mobile => _buildMobileLibrary(),
     };
+  }
+
+  /// Builds mobile retrieval surface.
+  Widget _buildMobileLibrary() {
+    return MobileLibraryScreen(
+      controller: widget.controller,
+      clipboard: widget.clipboard,
+    );
   }
 
   /// Builds full library surface.
