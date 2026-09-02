@@ -10,6 +10,7 @@ import '../../models/library_failure.dart';
 import '../delete_entry_dialog.dart';
 import '../library_controller.dart';
 import '../library_failure_message.dart';
+import '../library_share.dart';
 import '../library_state.dart';
 import 'mobile_library_actions.dart';
 
@@ -42,6 +43,7 @@ final class _MobileEntryDetailScreenState
     extends State<MobileEntryDetailScreen> {
   late LibraryState _state;
   late final StreamSubscription<LibraryState> _subscription;
+  final GlobalKey _shareAnchorKey = GlobalKey();
   bool _popRequested = false;
 
   @override
@@ -186,14 +188,41 @@ final class _MobileEntryDetailScreenState
             ),
             Padding(
               padding: const EdgeInsets.all(16),
-              child: SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  key: const Key('mobile-detail-copy'),
-                  onPressed: () => unawaited(_handleCopy(entry)),
-                  icon: const Icon(Icons.copy_outlined),
-                  label: const Text('Copy'),
-                ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: ConstrainedBox(
+                      key: _shareAnchorKey,
+                      constraints: const BoxConstraints(minHeight: 48),
+                      child: OutlinedButton.icon(
+                        key: const Key('mobile-detail-share'),
+                        onPressed: () => unawaited(_handleShare(entry)),
+                        icon: widget.actions.isSharePending(entry.id)
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.share_outlined),
+                        label: const Text('Share'),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 48),
+                      child: FilledButton.icon(
+                        key: const Key('mobile-detail-copy'),
+                        onPressed: () => unawaited(_handleCopy(entry)),
+                        icon: const Icon(Icons.copy_outlined),
+                        label: const Text('Copy'),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -243,6 +272,47 @@ final class _MobileEntryDetailScreenState
     } on LibraryFailure {
       // The controller retains a non-sensitive failure for the banner.
     }
+  }
+
+  /// Runs one coalesced share cycle from the detail route.
+  Future<void> _handleShare(Entry entry) async {
+    final cycle = widget.actions.shareEntry(entry, anchor: _shareAnchor());
+    if (mounted) {
+      setState(() {});
+    }
+    LibraryShareOutcome? outcome;
+    try {
+      outcome = await cycle;
+    } finally {
+      if (mounted) {
+        setState(() {});
+      }
+    }
+    if (!mounted || outcome == null) {
+      return;
+    }
+    final message = switch (outcome) {
+      LibraryShareOutcome.selected || LibraryShareOutcome.dismissed => null,
+      LibraryShareOutcome.unavailable =>
+        'Sharing is not available on this device.',
+      LibraryShareOutcome.invocationFailure =>
+        'The prompt could not be shared.',
+    };
+    if (message != null) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  /// Resolves the share button rectangle.
+  Rect? _shareAnchor() {
+    final renderObject = _shareAnchorKey.currentContext?.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.hasSize) {
+      return null;
+    }
+    final anchor = renderObject.localToGlobal(Offset.zero) & renderObject.size;
+    return anchor.isEmpty ? null : anchor;
   }
 
   /// Runs one coalesced copy cycle from the detail route.

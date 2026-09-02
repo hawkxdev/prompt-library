@@ -70,10 +70,12 @@ void main() {
 
   late TestLibraryRepository repository;
   late LibraryController controller;
+  late _RecordingShare share;
 
   setUp(() {
     repository = TestLibraryRepository();
     controller = LibraryController(repository: repository);
+    share = _RecordingShare();
   });
 
   tearDown(() async {
@@ -103,6 +105,7 @@ void main() {
         applicationSurface: ApplicationSurface.mobile,
         controller: controller,
         clipboard: const _NoopClipboard(),
+        share: share,
       ),
     );
     repository.emit(
@@ -360,6 +363,118 @@ void main() {
     expect(find.byKey(const Key('route-sentinel')), findsNothing);
     await disposeApp(tester);
   });
+
+  testWidgets('shares the exact entry body without normalizing whitespace', (
+    tester,
+  ) async {
+    const body = '  leading\nand trailing  ';
+    await pumpDetail(tester, body: body);
+
+    await tester.tap(find.byKey(const Key('mobile-detail-share')));
+    await pumpState(tester);
+
+    expect(share.invocations, hasLength(1));
+    expect(_escape(share.invocations.single.text), _escape(body));
+    await disposeApp(tester);
+  });
+
+  testWidgets('anchors sharing to the global share button geometry', (
+    tester,
+  ) async {
+    await pumpDetail(tester);
+    final button = find.byKey(const Key('mobile-detail-share'));
+    final expected = tester.getTopLeft(button) & tester.getSize(button);
+
+    await tester.tap(button);
+    await pumpState(tester);
+
+    final anchor = share.invocations.single.anchor;
+    expect(anchor, isNotNull);
+    expect(anchor!.isEmpty, isFalse);
+    expect(anchor, expected);
+    await disposeApp(tester);
+  });
+
+  testWidgets('joins rapid share taps into one invocation and one message', (
+    tester,
+  ) async {
+    share.outcome = LibraryShareOutcome.unavailable;
+    final gate = Completer<void>();
+    share.gate = gate;
+    await pumpDetail(tester);
+    final button = find.byKey(const Key('mobile-detail-share'));
+
+    await tester.tap(button);
+    await tester.pump();
+    await tester.tap(button);
+    await tester.pump();
+
+    expect(share.invocations, hasLength(1));
+    gate.complete();
+    await pumpState(tester);
+
+    expect(
+      find.text('Sharing is not available on this device.'),
+      findsOneWidget,
+    );
+    await disposeApp(tester);
+  });
+
+  for (final scenario in <({LibraryShareOutcome outcome, String? message})>[
+    (outcome: LibraryShareOutcome.dismissed, message: null),
+    (
+      outcome: LibraryShareOutcome.unavailable,
+      message: 'Sharing is not available on this device.',
+    ),
+    (
+      outcome: LibraryShareOutcome.invocationFailure,
+      message: 'The prompt could not be shared.',
+    ),
+    (outcome: LibraryShareOutcome.selected, message: null),
+  ]) {
+    testWidgets('maps ${scenario.outcome.name} to honest share feedback', (
+      tester,
+    ) async {
+      share.outcome = scenario.outcome;
+      await pumpDetail(tester);
+
+      await tester.tap(find.byKey(const Key('mobile-detail-share')));
+      await pumpState(tester);
+
+      if (scenario.message case final message?) {
+        expect(find.text(message), findsOneWidget);
+      } else {
+        expect(find.byType(SnackBar), findsNothing);
+      }
+      expect(find.textContaining('Shared'), findsNothing);
+      expect(find.textContaining('Sent'), findsNothing);
+      await disposeApp(tester);
+    });
+  }
+
+  testWidgets('keeps share accessible with doubled text scale', (tester) async {
+    final semantics = tester.ensureSemantics();
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await pumpDetail(tester);
+
+    final shareButton = find.byKey(const Key('mobile-detail-share'));
+    final copyButton = find.byKey(const Key('mobile-detail-copy'));
+    expect(tester.getSize(shareButton).height, greaterThanOrEqualTo(48));
+    expect(
+      tester.getSemantics(shareButton).label,
+      isNot(tester.getSemantics(copyButton).label),
+    );
+    expect(tester.takeException(), isNull);
+
+    semantics.dispose();
+    await disposeApp(tester);
+  });
+}
+
+/// Renders whitespace visibly for failure reports.
+String _escape(String value) {
+  return value.replaceAll(' ', '<sp>').replaceAll('\n', '<nl>');
 }
 
 /// Ignores clipboard writes.
@@ -368,4 +483,23 @@ final class _NoopClipboard implements LibraryClipboard {
 
   @override
   Future<void> writeText(String text) async {}
+}
+
+/// Records exact system sharing calls.
+final class _RecordingShare implements LibraryShare {
+  /// Recorded share invocations.
+  final List<({String text, Rect? anchor})> invocations = [];
+
+  /// Result returned by each invocation.
+  LibraryShareOutcome outcome = LibraryShareOutcome.dismissed;
+
+  /// Optional completion gate.
+  Completer<void>? gate;
+
+  @override
+  Future<LibraryShareOutcome> shareText(String text, {Rect? anchor}) async {
+    invocations.add((text: text, anchor: anchor));
+    await gate?.future;
+    return outcome;
+  }
 }
