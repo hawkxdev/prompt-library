@@ -13,6 +13,7 @@ import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
 import 'package:prompt_library/src/library/presentation/library_failure_message.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_entry_detail_screen.dart';
+import 'package:prompt_library/src/library/presentation/mobile/mobile_library_screen.dart';
 
 import '../../../support/library_test_support.dart';
 
@@ -68,9 +69,61 @@ void main() {
     expect(find.byType(MobileEntryDetailScreen), findsOneWidget);
   }
 
+  Future<void> pumpNestedDetail(WidgetTester tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          key: const Key('route-sentinel'),
+          body: Builder(
+            builder: (context) => FilledButton(
+              key: const Key('open-mobile-library'),
+              onPressed: () => Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) => MobileLibraryScreen(
+                    controller: controller,
+                    clipboard: const _NoopClipboard(),
+                  ),
+                ),
+              ),
+              child: const Text('Open library'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const Key('open-mobile-library')));
+    await tester.pump(const Duration(milliseconds: 400));
+    repository.emit(
+      LibrarySnapshot(
+        entries: [
+          testEntry('entry-1', title: 'Private title', body: 'Private body'),
+          testEntry('entry-2', title: 'Remaining prompt'),
+        ],
+      ),
+    );
+    await pumpState(tester);
+    await tester.tap(find.byKey(const Key('mobile-entry-disclosure-entry-1')));
+    await pumpState(tester);
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(MobileEntryDetailScreen), findsOneWidget);
+  }
+
   Future<void> disposeApp(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+  }
+
+  Future<void> pumpUntilAbsent(WidgetTester tester, Finder finder) async {
+    for (var attempt = 0; attempt < 20; attempt++) {
+      if (finder.evaluate().isEmpty) {
+        return;
+      }
+      await tester.pump(const Duration(milliseconds: 100));
+    }
   }
 
   testWidgets('toggles favorite once and updates the action label', (
@@ -170,6 +223,91 @@ void main() {
     await pumpState(tester);
 
     expect(banner, findsNothing);
+    await disposeApp(tester);
+  });
+
+  testWidgets('cancels deletion without calling the repository', (
+    tester,
+  ) async {
+    await pumpDetail(tester);
+    await tester.tap(find.byKey(const Key('mobile-detail-copy')));
+    await pumpState(tester);
+    expect(
+      repository.calls,
+      isNotEmpty,
+      reason: 'positive control: the recorder observes real mutations',
+    );
+
+    await tester.tap(find.byKey(const Key('mobile-detail-delete')));
+    await tester.pump();
+
+    expect(find.text('Delete prompt?'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(
+      repository.calls.where((call) => call == 'deleteEntry:entry-1'),
+      isEmpty,
+    );
+    expect(find.byType(MobileEntryDetailScreen), findsOneWidget);
+    await disposeApp(tester);
+  });
+
+  testWidgets('confirms deletion and returns to the mobile list', (
+    tester,
+  ) async {
+    await pumpDetail(tester);
+    repository.emit(
+      LibrarySnapshot(
+        entries: [
+          testEntry('entry-1', title: 'Private title', body: 'Private body'),
+          testEntry('entry-2', title: 'Remaining prompt'),
+        ],
+      ),
+    );
+    await pumpState(tester);
+
+    await tester.tap(find.byKey(const Key('mobile-detail-delete')));
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await pumpState(tester);
+    await pumpUntilAbsent(tester, find.byType(MobileEntryDetailScreen));
+
+    expect(
+      repository.calls.where((call) => call == 'deleteEntry:entry-1'),
+      hasLength(1),
+    );
+    expect(find.byType(MobileEntryDetailScreen), findsNothing);
+    expect(find.byKey(const Key('mobile-library-list')), findsOneWidget);
+    await disposeApp(tester);
+  });
+
+  testWidgets('closes only the detail route across repeated delete states', (
+    tester,
+  ) async {
+    await pumpNestedDetail(tester);
+    final gate = Completer<void>();
+    repository.nextMutationGate = gate;
+
+    await tester.tap(find.byKey(const Key('mobile-detail-delete')));
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pump();
+    gate.complete();
+    await pumpState(tester);
+    final remaining = LibrarySnapshot(
+      entries: [testEntry('entry-2', title: 'Remaining prompt')],
+    );
+    repository.emit(remaining);
+    await tester.pump(const Duration(milliseconds: 100));
+    repository.emit(remaining);
+    await tester.pump(const Duration(milliseconds: 100));
+    await pumpUntilAbsent(tester, find.byType(MobileEntryDetailScreen));
+
+    expect(find.byType(MobileEntryDetailScreen), findsNothing);
+    expect(find.byKey(const Key('mobile-library-search')), findsOneWidget);
+    expect(find.byKey(const Key('mobile-library-list')), findsOneWidget);
+    expect(find.byKey(const Key('route-sentinel')), findsNothing);
     await disposeApp(tester);
   });
 }

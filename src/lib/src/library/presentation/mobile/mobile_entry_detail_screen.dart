@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/entry.dart';
 import '../../models/library_failure.dart';
+import '../delete_entry_dialog.dart';
 import '../library_controller.dart';
 import '../library_failure_message.dart';
 import '../library_state.dart';
@@ -41,6 +42,7 @@ final class _MobileEntryDetailScreenState
     extends State<MobileEntryDetailScreen> {
   late LibraryState _state;
   late final StreamSubscription<LibraryState> _subscription;
+  bool _popRequested = false;
 
   @override
   void initState() {
@@ -61,7 +63,8 @@ final class _MobileEntryDetailScreenState
       return;
     }
     setState(() => _state = state);
-    if (_resolveEntry() == null) {
+    if (_resolveEntry() == null && !_popRequested) {
+      _popRequested = true;
       unawaited(Navigator.of(context).maybePop());
     }
   }
@@ -121,6 +124,15 @@ final class _MobileEntryDetailScreenState
                   ? Icons.unarchive_outlined
                   : Icons.archive_outlined,
             ),
+          ),
+          IconButton(
+            key: const Key('mobile-detail-delete'),
+            tooltip: 'Delete',
+            onPressed:
+                _isMutationActive(LibraryMutationKind.deleteEntry, entry.id)
+                ? null
+                : () => unawaited(_deleteEntry(entry)),
+            icon: const Icon(Icons.delete_outline),
           ),
         ],
       ),
@@ -213,6 +225,15 @@ final class _MobileEntryDetailScreenState
         isArchived: !entry.isArchived,
       ),
     );
+  }
+
+  /// Confirms and deletes one entry.
+  Future<void> _deleteEntry(Entry entry) async {
+    final confirmed = await showDeleteEntryDialog(context, entry: entry);
+    if (!confirmed || !mounted) {
+      return;
+    }
+    await _runMutation(() => widget.controller.deleteEntry(entry.id));
   }
 
   /// Runs a mutation through the retained failure banner.
