@@ -10,6 +10,8 @@ import '../../models/library_failure.dart';
 import '../library_clipboard.dart';
 import '../library_controller.dart';
 import '../library_failure_message.dart';
+import '../library_haptics.dart';
+import '../library_share.dart';
 import '../library_state.dart';
 import 'mobile_entry_detail_screen.dart';
 import 'mobile_filter_sheet.dart';
@@ -22,6 +24,8 @@ final class MobileLibraryScreen extends StatefulWidget {
   const MobileLibraryScreen({
     required this.controller,
     required this.clipboard,
+    required this.share,
+    required this.haptics,
     super.key,
   });
 
@@ -30,6 +34,12 @@ final class MobileLibraryScreen extends StatefulWidget {
 
   /// Exact clipboard boundary.
   final LibraryClipboard clipboard;
+
+  /// System sharing boundary.
+  final LibraryShare share;
+
+  /// Best-effort tactile feedback boundary.
+  final LibraryHaptics haptics;
 
   @override
   State<MobileLibraryScreen> createState() => _MobileLibraryScreenState();
@@ -51,6 +61,8 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
     _actions = MobileLibraryActions(
       controller: widget.controller,
       clipboard: widget.clipboard,
+      share: widget.share,
+      haptics: widget.haptics,
     );
     _subscription = widget.controller.states.listen((state) {
       if (!mounted) return;

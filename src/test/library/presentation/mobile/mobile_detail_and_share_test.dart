@@ -4,6 +4,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompt_library/src/app/application_surface.dart';
 import 'package:prompt_library/src/app/prompt_library_app.dart';
@@ -12,6 +13,8 @@ import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
 import 'package:prompt_library/src/library/presentation/library_failure_message.dart';
+import 'package:prompt_library/src/library/presentation/library_haptics.dart';
+import 'package:prompt_library/src/library/presentation/library_share.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_entry_detail_screen.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_library_screen.dart';
 
@@ -19,6 +22,51 @@ import '../../../support/library_test_support.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('reports system sharing as unavailable without an adapter', () async {
+    expect(
+      await const UnavailableLibraryShare().shareText('body'),
+      LibraryShareOutcome.unavailable,
+    );
+  });
+
+  test(
+    'sends selection feedback through the Flutter platform channel',
+    () async {
+      final calls = <MethodCall>[];
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        calls.add(call);
+        return null;
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+
+      await const FlutterLibraryHaptics().selectionFeedback();
+
+      expect(calls, hasLength(1));
+      expect(calls.single.method, 'HapticFeedback.vibrate');
+      expect(calls.single.arguments, 'HapticFeedbackType.selectionClick');
+    },
+  );
+
+  test('absorbs a platform haptic failure', () async {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      throw PlatformException(code: 'unavailable');
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+
+    await expectLater(
+      const FlutterLibraryHaptics().selectionFeedback(),
+      completes,
+    );
+  });
 
   late TestLibraryRepository repository;
   late LibraryController controller;
@@ -86,6 +134,8 @@ void main() {
                   builder: (_) => MobileLibraryScreen(
                     controller: controller,
                     clipboard: const _NoopClipboard(),
+                    share: const UnavailableLibraryShare(),
+                    haptics: const FlutterLibraryHaptics(),
                   ),
                 ),
               ),

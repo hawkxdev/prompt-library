@@ -12,6 +12,8 @@ import '../library/data/drift_library_repository.dart';
 import '../library/data/library_database.dart';
 import '../library/presentation/library_clipboard.dart';
 import '../library/presentation/library_controller.dart';
+import '../library/presentation/library_haptics.dart';
+import '../library/presentation/library_share.dart';
 import '../platform/macos/mac_quick_panel_port.dart';
 import '../platform/macos/method_channel_mac_quick_panel.dart';
 import '../platform/macos/quick_panel_controller.dart';
@@ -33,6 +35,8 @@ final class PromptLibraryComposition {
     required this.repository,
     required this.controller,
     required this.clipboard,
+    this.share = const UnavailableLibraryShare(),
+    this.haptics = const FlutterLibraryHaptics(),
     QuickPanelController? quickPanelController,
     this.quickAccessSupported = false,
   }) : quickPanelController =
@@ -92,6 +96,12 @@ final class PromptLibraryComposition {
 
   /// Exact clipboard boundary.
   final LibraryClipboard clipboard;
+
+  /// System sharing boundary.
+  final LibraryShare share;
+
+  /// Best-effort tactile feedback boundary.
+  final LibraryHaptics haptics;
 
   /// Quick workflow and native-port owner.
   final QuickPanelController quickPanelController;
@@ -198,6 +208,8 @@ final class _PromptLibraryCompositionRootState
       applicationSurface: _composition.applicationSurface,
       controller: _composition.controller,
       clipboard: _composition.clipboard,
+      share: _composition.share,
+      haptics: _composition.haptics,
       quickPanelController: _composition.quickPanelController,
       quickAccessSupported: _composition.quickAccessSupported,
     );

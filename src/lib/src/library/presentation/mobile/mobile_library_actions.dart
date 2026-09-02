@@ -1,11 +1,11 @@
 /// Mobile retrieval actions.
 library;
 
-import 'package:flutter/services.dart';
-
 import '../../models/entry.dart';
 import '../library_clipboard.dart';
 import '../library_controller.dart';
+import '../library_haptics.dart';
+import '../library_share.dart';
 
 /// Reports the observable result of one mobile copy cycle.
 enum MobileCopyOutcome { copied, clipboardFailure }
@@ -13,13 +13,24 @@ enum MobileCopyOutcome { copied, clipboardFailure }
 /// Coalesces one complete copy cycle per entry.
 final class MobileLibraryActions {
   /// Creates mobile retrieval actions.
-  MobileLibraryActions({required this.controller, required this.clipboard});
+  MobileLibraryActions({
+    required this.controller,
+    required this.clipboard,
+    required this.share,
+    required this.haptics,
+  });
 
   /// Shared application controller.
   final LibraryController controller;
 
   /// Exact clipboard boundary.
   final LibraryClipboard clipboard;
+
+  /// System sharing boundary.
+  final LibraryShare share;
+
+  /// Best-effort tactile feedback boundary.
+  final LibraryHaptics haptics;
 
   final Map<String, Future<MobileCopyOutcome>> _inFlight = {};
 
@@ -53,21 +64,10 @@ final class MobileLibraryActions {
       } on LibraryClipboardFailure {
         return MobileCopyOutcome.clipboardFailure;
       }
-      await _requestHapticFeedback();
+      await haptics.selectionFeedback();
       return MobileCopyOutcome.copied;
     } finally {
       _inFlight.remove(entry.id);
-    }
-  }
-
-  /// Requests best-effort selection haptic after a successful copy.
-  Future<void> _requestHapticFeedback() async {
-    try {
-      await HapticFeedback.selectionClick();
-    } on PlatformException {
-      // Haptic feedback is best-effort; clipboard success stays authoritative.
-    } on MissingPluginException {
-      // A platform without the haptic channel must not fail the copy cycle.
     }
   }
 }

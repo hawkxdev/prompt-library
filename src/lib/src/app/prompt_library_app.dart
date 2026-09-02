@@ -7,7 +7,9 @@ import 'package:flutter/material.dart';
 
 import '../library/presentation/library_clipboard.dart';
 import '../library/presentation/library_controller.dart';
+import '../library/presentation/library_haptics.dart';
 import '../library/presentation/library_screen.dart';
+import '../library/presentation/library_share.dart';
 import '../library/presentation/mobile/mobile_library_screen.dart';
 import '../platform/macos/hotkey_settings_dialog.dart';
 import '../platform/macos/quick_mode_view.dart';
@@ -22,6 +24,8 @@ final class PromptLibraryApp extends StatefulWidget {
     required this.applicationSurface,
     required this.controller,
     required this.clipboard,
+    this.share = const UnavailableLibraryShare(),
+    this.haptics = const FlutterLibraryHaptics(),
     this.quickPanelController,
     this.quickAccessSupported = false,
     super.key,
@@ -38,6 +42,12 @@ final class PromptLibraryApp extends StatefulWidget {
 
   /// Exact clipboard boundary.
   final LibraryClipboard clipboard;
+
+  /// System sharing boundary.
+  final LibraryShare share;
+
+  /// Best-effort tactile feedback boundary.
+  final LibraryHaptics haptics;
 
   /// Optional quick-workflow controller.
   final QuickPanelController? quickPanelController;
@@ -144,6 +154,8 @@ final class _PromptLibraryAppState extends State<PromptLibraryApp> {
     return MobileLibraryScreen(
       controller: widget.controller,
       clipboard: widget.clipboard,
+      share: widget.share,
+      haptics: widget.haptics,
     );
   }
 

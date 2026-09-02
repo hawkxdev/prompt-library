@@ -4,14 +4,19 @@ library;
 import 'dart:ui' show AppExitResponse;
 
 import 'package:drift/native.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompt_library/src/app/application_surface.dart';
 import 'package:prompt_library/src/app/composition_root.dart';
+import 'package:prompt_library/src/app/prompt_library_app.dart';
 import 'package:prompt_library/src/library/data/drift_library_repository.dart';
 import 'package:prompt_library/src/library/data/library_database.dart';
 import 'package:prompt_library/src/library/models/entry_input.dart';
 import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
+import 'package:prompt_library/src/library/presentation/library_haptics.dart';
+import 'package:prompt_library/src/library/presentation/library_share.dart';
+import 'package:prompt_library/src/library/presentation/mobile/mobile_library_screen.dart';
 import 'package:prompt_library/src/platform/macos/mac_quick_panel_port.dart';
 import 'package:prompt_library/src/platform/macos/method_channel_mac_quick_panel.dart';
 import 'package:prompt_library/src/platform/macos/unavailable_mac_quick_panel.dart';
@@ -39,6 +44,8 @@ void main() {
     );
 
     expect(composition.applicationSurface, ApplicationSurface.desktop);
+    expect(composition.share, isA<UnavailableLibraryShare>());
+    expect(composition.haptics, isA<FlutterLibraryHaptics>());
 
     await controller.createEntry(
       EntryInput.validate(title: 'Title', body: 'Body'),
@@ -56,6 +63,48 @@ void main() {
       database.customSelect('SELECT 1').get(),
       throwsStateError,
     );
+  });
+
+  testWidgets('passes composition capabilities into the mobile app', (
+    tester,
+  ) async {
+    final database = LibraryDatabase.forTesting(NativeDatabase.memory());
+    final repository = DriftLibraryRepository(database);
+    final controller = LibraryController(repository: repository);
+    const share = _NoopShare();
+    const haptics = _NoopHaptics();
+    final composition = PromptLibraryComposition(
+      applicationSurface: ApplicationSurface.mobile,
+      database: database,
+      repository: repository,
+      controller: controller,
+      clipboard: const _NoopClipboard(),
+      share: share,
+      haptics: haptics,
+    );
+
+    await tester.pumpWidget(
+      PromptLibraryApp(
+        applicationSurface: composition.applicationSurface,
+        controller: composition.controller,
+        clipboard: composition.clipboard,
+        share: composition.share,
+        haptics: composition.haptics,
+      ),
+    );
+
+    final mobile = tester.widget<MobileLibraryScreen>(
+      find.byType(MobileLibraryScreen),
+    );
+    expect(identical(mobile.share, share), isTrue);
+    expect(identical(mobile.haptics, haptics), isTrue);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.runAsync(() async {
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+    });
+    await tester.runAsync(composition.dispose);
   });
 
   test(
@@ -175,6 +224,22 @@ final class _NoopClipboard implements LibraryClipboard {
 
   @override
   Future<void> writeText(String text) async {}
+}
+
+final class _NoopShare implements LibraryShare {
+  const _NoopShare();
+
+  @override
+  Future<LibraryShareOutcome> shareText(String text, {Rect? anchor}) async {
+    return LibraryShareOutcome.dismissed;
+  }
+}
+
+final class _NoopHaptics implements LibraryHaptics {
+  const _NoopHaptics();
+
+  @override
+  Future<void> selectionFeedback() async {}
 }
 
 final class _RecordingQuickPort implements MacQuickPanelPort {

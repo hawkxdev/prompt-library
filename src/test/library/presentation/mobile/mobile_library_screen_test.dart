@@ -4,7 +4,6 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompt_library/src/app/application_surface.dart';
 import 'package:prompt_library/src/app/prompt_library_app.dart';
@@ -13,6 +12,8 @@ import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
 import 'package:prompt_library/src/library/presentation/library_filter.dart';
+import 'package:prompt_library/src/library/presentation/library_haptics.dart';
+import 'package:prompt_library/src/library/presentation/library_share.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_entry_detail_screen.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_library_actions.dart';
 
@@ -24,37 +25,23 @@ void main() {
   late TestLibraryRepository repository;
   late LibraryController controller;
   late _RecordingClipboard clipboard;
+  late _RecordingHaptics haptics;
   late MobileLibraryActions actions;
-  late List<MethodCall> hapticCalls;
-  Object? hapticError;
 
   setUp(() {
     repository = TestLibraryRepository();
     controller = LibraryController(repository: repository);
     clipboard = _RecordingClipboard();
+    haptics = _RecordingHaptics();
     actions = MobileLibraryActions(
       controller: controller,
       clipboard: clipboard,
+      share: const UnavailableLibraryShare(),
+      haptics: haptics,
     );
-    hapticCalls = [];
-    hapticError = null;
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
-          if (call.method != 'HapticFeedback.vibrate') {
-            return null;
-          }
-          hapticCalls.add(call);
-          final error = hapticError;
-          if (error != null) {
-            throw error;
-          }
-          return null;
-        });
   });
 
   tearDown(() async {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(SystemChannels.platform, null);
     await controller.dispose();
     await repository.close();
   });
@@ -73,6 +60,7 @@ void main() {
         applicationSurface: ApplicationSurface.mobile,
         controller: controller,
         clipboard: clipboard,
+        haptics: haptics,
       ),
     );
   }
@@ -135,7 +123,7 @@ void main() {
       expect(await second, isNull);
       expect(clipboard.writes, ['exact body']);
       expect(markCopiedCalls('one'), 1);
-      expect(hapticCalls, hasLength(1));
+      expect(haptics.calls, 1);
       expect(actions.isPending('one'), isFalse);
     });
 
@@ -148,7 +136,7 @@ void main() {
 
       expect(clipboard.writes, hasLength(2));
       expect(markCopiedCalls('one'), 2);
-      expect(hapticCalls, hasLength(2));
+      expect(haptics.calls, 2);
     });
 
     test('runs independent cycles for different entries', () async {
@@ -184,18 +172,17 @@ void main() {
 
       expect(clipboard.writes, isEmpty);
       expect(markCopiedCalls('one'), 0);
-      expect(hapticCalls, isEmpty);
+      expect(haptics.calls, 0);
       expect(actions.isPending('one'), isFalse);
     });
 
-    test('keeps the copy authoritative when haptic feedback fails', () async {
+    test('requests best-effort haptic after a successful copy', () async {
       final entry = testEntry('one');
       repository.emit(LibrarySnapshot(entries: [entry]));
-      hapticError = PlatformException(code: 'unavailable');
 
       expect(await actions.copyEntry(entry), MobileCopyOutcome.copied);
 
-      expect(hapticCalls, hasLength(1));
+      expect(haptics.calls, 1);
       expect(markCopiedCalls('one'), 1);
     });
 
@@ -1023,5 +1010,16 @@ final class _RecordingClipboard implements LibraryClipboard {
       throw error;
     }
     writes.add(text);
+  }
+}
+
+/// Records tactile feedback requests.
+final class _RecordingHaptics implements LibraryHaptics {
+  /// Number of feedback requests.
+  int calls = 0;
+
+  @override
+  Future<void> selectionFeedback() async {
+    calls++;
   }
 }
