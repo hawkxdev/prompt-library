@@ -106,6 +106,7 @@ void main() {
         controller: controller,
         clipboard: const _NoopClipboard(),
         share: share,
+        haptics: const _NoopHaptics(),
       ),
     );
     repository.emit(
@@ -138,7 +139,7 @@ void main() {
                     controller: controller,
                     clipboard: const _NoopClipboard(),
                     share: const UnavailableLibraryShare(),
-                    haptics: const FlutterLibraryHaptics(),
+                    haptics: const _NoopHaptics(),
                   ),
                 ),
               ),
@@ -246,6 +247,23 @@ void main() {
     await disposeApp(tester);
   });
 
+  testWidgets('disables archive while its mutation is in flight', (
+    tester,
+  ) async {
+    await pumpDetail(tester);
+    final gate = Completer<void>();
+    repository.nextMutationGate = gate;
+    final archive = find.byKey(const Key('mobile-detail-archive'));
+
+    await tester.tap(archive);
+    await tester.pump();
+
+    expect(tester.widget<IconButton>(archive).onPressed, isNull);
+    gate.complete();
+    await pumpState(tester);
+    await disposeApp(tester);
+  });
+
   testWidgets('shows and dismisses a non-sensitive mutation failure', (
     tester,
   ) async {
@@ -335,6 +353,25 @@ void main() {
     await disposeApp(tester);
   });
 
+  testWidgets('disables delete while its mutation is in flight', (
+    tester,
+  ) async {
+    await pumpDetail(tester);
+    final gate = Completer<void>();
+    repository.nextMutationGate = gate;
+    final delete = find.byKey(const Key('mobile-detail-delete'));
+
+    await tester.tap(delete);
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pump();
+
+    expect(tester.widget<IconButton>(delete).onPressed, isNull);
+    gate.complete();
+    await pumpState(tester);
+    await disposeApp(tester);
+  });
+
   testWidgets('closes only the detail route across repeated delete states', (
     tester,
   ) async {
@@ -348,13 +385,22 @@ void main() {
     await tester.pump();
     gate.complete();
     await pumpState(tester);
-    final remaining = LibrarySnapshot(
-      entries: [testEntry('entry-2', title: 'Remaining prompt')],
+    repository.emit(
+      LibrarySnapshot(
+        entries: [testEntry('entry-2', title: 'Remaining prompt')],
+      ),
     );
-    repository.emit(remaining);
-    await tester.pump(const Duration(milliseconds: 100));
-    repository.emit(remaining);
-    await tester.pump(const Duration(milliseconds: 100));
+    await pumpState(tester);
+    await tester.pump(const Duration(milliseconds: 16));
+    repository.emit(
+      LibrarySnapshot(
+        entries: [
+          testEntry('entry-2', title: 'Remaining prompt'),
+          testEntry('entry-3', title: 'Third prompt'),
+        ],
+      ),
+    );
+    await pumpState(tester);
     await pumpUntilAbsent(tester, find.byType(MobileEntryDetailScreen));
 
     expect(find.byType(MobileEntryDetailScreen), findsNothing);
@@ -417,6 +463,65 @@ void main() {
       find.text('Sharing is not available on this device.'),
       findsOneWidget,
     );
+    await disposeApp(tester);
+  });
+
+  testWidgets('shows progress while a share invocation is pending', (
+    tester,
+  ) async {
+    final gate = Completer<void>();
+    share.gate = gate;
+    await pumpDetail(tester);
+    final button = find.byKey(const Key('mobile-detail-share'));
+
+    await tester.tap(button);
+    await tester.pump();
+
+    expect(
+      find.descendant(
+        of: button,
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: button, matching: find.byIcon(Icons.share_outlined)),
+      findsNothing,
+    );
+
+    gate.complete();
+    await pumpState(tester);
+
+    expect(
+      find.descendant(
+        of: button,
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: button, matching: find.byIcon(Icons.share_outlined)),
+      findsOneWidget,
+    );
+    await disposeApp(tester);
+  });
+
+  testWidgets('maps an asynchronous share error to invocation failure', (
+    tester,
+  ) async {
+    share.nextError = StateError('share adapter failed');
+    final gate = Completer<void>();
+    share.gate = gate;
+    await pumpDetail(tester);
+
+    await tester.tap(find.byKey(const Key('mobile-detail-share')));
+    await tester.pump();
+    expect(share.invocations, hasLength(1));
+    gate.complete();
+    await pumpState(tester);
+
+    expect(find.text('The prompt could not be shared.'), findsOneWidget);
+    expect(tester.takeException(), isNull);
     await disposeApp(tester);
   });
 
@@ -485,6 +590,15 @@ final class _NoopClipboard implements LibraryClipboard {
   Future<void> writeText(String text) async {}
 }
 
+/// Ignores tactile feedback requests.
+final class _NoopHaptics implements LibraryHaptics {
+  /// Creates no-op haptics.
+  const _NoopHaptics();
+
+  @override
+  Future<void> selectionFeedback() async {}
+}
+
 /// Records exact system sharing calls.
 final class _RecordingShare implements LibraryShare {
   /// Recorded share invocations.
@@ -496,10 +610,18 @@ final class _RecordingShare implements LibraryShare {
   /// Optional completion gate.
   Completer<void>? gate;
 
+  /// Throwable raised after the asynchronous boundary.
+  Object? nextError;
+
   @override
   Future<LibraryShareOutcome> shareText(String text, {Rect? anchor}) async {
     invocations.add((text: text, anchor: anchor));
     await gate?.future;
+    final error = nextError;
+    nextError = null;
+    if (error != null) {
+      throw error;
+    }
     return outcome;
   }
 }

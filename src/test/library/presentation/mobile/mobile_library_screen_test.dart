@@ -176,12 +176,14 @@ void main() {
       expect(actions.isPending('one'), isFalse);
     });
 
-    test('requests best-effort haptic after a successful copy', () async {
-      final entry = testEntry('one');
+    test('keeps the copy authoritative when haptic feedback fails', () async {
+      final entry = testEntry('one', body: 'exact body');
       repository.emit(LibrarySnapshot(entries: [entry]));
+      haptics.nextError = StateError('haptic adapter failed');
 
       expect(await actions.copyEntry(entry), MobileCopyOutcome.copied);
 
+      expect(clipboard.writes, ['exact body']);
       expect(haptics.calls, 1);
       expect(markCopiedCalls('one'), 1);
     });
@@ -197,6 +199,26 @@ void main() {
       expect(await actions.copyEntry(entry), MobileCopyOutcome.copied);
       expect(markCopiedCalls('one'), 1);
     });
+
+    test(
+      'releases the share guard after a synchronous adapter error',
+      () async {
+        final entry = testEntry('one');
+        final throwingActions = MobileLibraryActions(
+          controller: controller,
+          clipboard: clipboard,
+          share: const _SynchronouslyThrowingShare(),
+          haptics: haptics,
+        );
+
+        expect(
+          await throwingActions.shareEntry(entry),
+          LibraryShareOutcome.invocationFailure,
+        );
+
+        expect(throwingActions.isSharePending('one'), isFalse);
+      },
+    );
   });
 
   // === Observable state surfaces ===
@@ -1018,8 +1040,27 @@ final class _RecordingHaptics implements LibraryHaptics {
   /// Number of feedback requests.
   int calls = 0;
 
+  /// Throwable raised by the next request.
+  Object? nextError;
+
   @override
   Future<void> selectionFeedback() async {
     calls++;
+    final error = nextError;
+    nextError = null;
+    if (error != null) {
+      throw error;
+    }
+  }
+}
+
+/// Throws before returning a future.
+final class _SynchronouslyThrowingShare implements LibraryShare {
+  /// Creates a throwing share boundary.
+  const _SynchronouslyThrowingShare();
+
+  @override
+  Future<LibraryShareOutcome> shareText(String text, {Rect? anchor}) {
+    throw StateError('share adapter failed');
   }
 }

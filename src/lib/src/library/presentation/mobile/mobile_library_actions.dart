@@ -1,6 +1,7 @@
 /// Mobile retrieval actions.
 library;
 
+import 'dart:async';
 import 'dart:ui' show Rect;
 
 import '../../models/entry.dart';
@@ -67,9 +68,10 @@ final class MobileLibraryActions {
     if (joined != null) {
       return joined.then((_) => null);
     }
-    final cycle = _runShareCycle(entry, anchor: anchor);
-    _sharesInFlight[entry.id] = cycle;
-    return cycle;
+    final pending = Completer<LibraryShareOutcome>.sync();
+    _sharesInFlight[entry.id] = pending.future;
+    unawaited(_runShareCycle(entry, pending: pending, anchor: anchor));
+    return pending.future;
   }
 
   /// Executes one guarded copy cycle.
@@ -84,22 +86,36 @@ final class MobileLibraryActions {
       } on LibraryClipboardFailure {
         return MobileCopyOutcome.clipboardFailure;
       }
-      await haptics.selectionFeedback();
+      await _requestHapticFeedback();
       return MobileCopyOutcome.copied;
     } finally {
       _inFlight.remove(entry.id);
     }
   }
 
+  /// Requests non-authoritative tactile feedback.
+  Future<void> _requestHapticFeedback() async {
+    try {
+      await haptics.selectionFeedback();
+    } on Object {
+      return;
+    }
+  }
+
   /// Executes one guarded share cycle.
-  Future<LibraryShareOutcome> _runShareCycle(
+  Future<void> _runShareCycle(
     Entry entry, {
+    required Completer<LibraryShareOutcome> pending,
     Rect? anchor,
   }) async {
+    LibraryShareOutcome outcome;
     try {
-      return await share.shareText(entry.body, anchor: anchor);
+      outcome = await share.shareText(entry.body, anchor: anchor);
+    } on Object {
+      outcome = LibraryShareOutcome.invocationFailure;
     } finally {
       _sharesInFlight.remove(entry.id);
     }
+    pending.complete(outcome);
   }
 }

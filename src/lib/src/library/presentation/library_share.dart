@@ -25,6 +25,9 @@ abstract interface class LibraryShare {
   /// Presents one exact text payload.
   ///
   /// [anchor] is the initiating control rectangle in global logical pixels.
+  /// Full-screen Flutter global coordinates match host-view points.
+  ///
+  /// An adapter embedding Flutter in a smaller native view must convert them.
   /// Implementations must complete within a bounded time.
   Future<LibraryShareOutcome> shareText(String text, {Rect? anchor});
 }
