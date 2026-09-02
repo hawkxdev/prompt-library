@@ -6,7 +6,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../models/entry.dart';
+import '../../models/library_failure.dart';
 import '../library_controller.dart';
+import '../library_failure_message.dart';
 import '../library_state.dart';
 import 'mobile_library_actions.dart';
 
@@ -91,10 +93,51 @@ final class _MobileEntryDetailScreenState
         : snapshot.categoryById[entry.categoryId];
     final tags = snapshot.tagsForEntry[entry.id] ?? const [];
     return Scaffold(
-      appBar: AppBar(title: Text(entry.title)),
+      appBar: AppBar(
+        title: Text(entry.title),
+        actions: [
+          IconButton(
+            key: const Key('mobile-detail-favorite'),
+            tooltip: entry.isFavorite
+                ? 'Remove from favorites'
+                : 'Add to favorites',
+            onPressed:
+                _isMutationActive(LibraryMutationKind.setFavorite, entry.id)
+                ? null
+                : () => unawaited(_setFavorite(entry)),
+            icon: Icon(
+              entry.isFavorite ? Icons.star_rounded : Icons.star_border_rounded,
+            ),
+          ),
+          IconButton(
+            key: const Key('mobile-detail-archive'),
+            tooltip: entry.isArchived ? 'Restore' : 'Archive',
+            onPressed:
+                _isMutationActive(LibraryMutationKind.setArchived, entry.id)
+                ? null
+                : () => unawaited(_setArchived(entry)),
+            icon: Icon(
+              entry.isArchived
+                  ? Icons.unarchive_outlined
+                  : Icons.archive_outlined,
+            ),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: Column(
           children: [
+            if (_state.failure != null)
+              MaterialBanner(
+                key: const Key('mobile-detail-failure-banner'),
+                content: Text(messageForLibraryFailure(_state.failure!)),
+                actions: [
+                  TextButton(
+                    onPressed: widget.controller.dismissFailure,
+                    child: const Text('Dismiss'),
+                  ),
+                ],
+              ),
             Expanded(
               child: SingleChildScrollView(
                 key: const Key('mobile-detail-scroll'),
@@ -145,6 +188,40 @@ final class _MobileEntryDetailScreenState
         ),
       ),
     );
+  }
+
+  /// Whether one entry mutation is active.
+  bool _isMutationActive(LibraryMutationKind kind, String entryId) {
+    return _state.isMutationActive(LibraryMutationKey(kind, entityId: entryId));
+  }
+
+  /// Toggles the favorite state.
+  Future<void> _setFavorite(Entry entry) {
+    return _runMutation(
+      () => widget.controller.setFavorite(
+        entry.id,
+        isFavorite: !entry.isFavorite,
+      ),
+    );
+  }
+
+  /// Toggles the archive state.
+  Future<void> _setArchived(Entry entry) {
+    return _runMutation(
+      () => widget.controller.setArchived(
+        entry.id,
+        isArchived: !entry.isArchived,
+      ),
+    );
+  }
+
+  /// Runs a mutation through the retained failure banner.
+  Future<void> _runMutation(Future<void> Function() operation) async {
+    try {
+      await operation();
+    } on LibraryFailure {
+      // The controller retains a non-sensitive failure for the banner.
+    }
   }
 
   /// Runs one coalesced copy cycle from the detail route.
