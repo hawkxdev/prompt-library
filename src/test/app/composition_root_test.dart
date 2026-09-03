@@ -16,6 +16,7 @@ import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
 import 'package:prompt_library/src/library/presentation/library_haptics.dart';
 import 'package:prompt_library/src/library/presentation/library_share.dart';
+import 'package:prompt_library/src/platform/ios/share_plus_library_share.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_library_screen.dart';
 import 'package:prompt_library/src/platform/macos/mac_quick_panel_port.dart';
 import 'package:prompt_library/src/platform/macos/method_channel_mac_quick_panel.dart';
@@ -192,6 +193,14 @@ void main() {
 
     await macOS.dispose();
     await unavailable.dispose();
+  });
+
+  test('selects the system share on iOS and unavailable elsewhere', () {
+    final ios = PromptLibraryComposition.createShare(isIOS: true);
+    final other = PromptLibraryComposition.createShare(isIOS: false);
+
+    expect(ios, isA<SharePlusLibraryShare>());
+    expect(other, isA<UnavailableLibraryShare>());
   });
 
   test('keeps iOS surface independent from macOS quick access', () async {

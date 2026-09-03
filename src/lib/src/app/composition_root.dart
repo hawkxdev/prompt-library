@@ -14,6 +14,7 @@ import '../library/presentation/library_clipboard.dart';
 import '../library/presentation/library_controller.dart';
 import '../library/presentation/library_haptics.dart';
 import '../library/presentation/library_share.dart';
+import '../platform/ios/share_plus_library_share.dart';
 import '../platform/macos/mac_quick_panel_port.dart';
 import '../platform/macos/method_channel_mac_quick_panel.dart';
 import '../platform/macos/quick_panel_controller.dart';
@@ -54,6 +55,7 @@ final class PromptLibraryComposition {
     final controller = LibraryController(repository: repository);
     final clipboard = FlutterLibraryClipboard();
     final applicationSurface = selectApplicationSurface(isIOS: Platform.isIOS);
+    final share = createShare(isIOS: Platform.isIOS);
     final port = createPlatformPort(isMacOS: Platform.isMacOS);
     final quickPanelController = QuickPanelController(
       libraryController: controller,
@@ -66,9 +68,18 @@ final class PromptLibraryComposition {
       repository: repository,
       controller: controller,
       clipboard: clipboard,
+      share: share,
       quickPanelController: quickPanelController,
       quickAccessSupported: Platform.isMacOS,
     );
+  }
+
+  /// Creates the system or unavailable sharing at the composition boundary.
+  @visibleForTesting
+  static LibraryShare createShare({required bool isIOS}) {
+    return isIOS
+        ? const SharePlusLibraryShare()
+        : const UnavailableLibraryShare();
   }
 
   /// Creates the concrete or unavailable port at the composition boundary.

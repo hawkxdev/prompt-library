@@ -39,6 +39,7 @@ dependencies:
   path_provider: ^2.1.6
   path: ^1.9.1
   mcp_toolkit: ^0.3.0
+  share_plus: ^13.3.0
 
 dev_dependencies:
   integration_test:
