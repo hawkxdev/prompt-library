@@ -12,6 +12,7 @@ import '../library_controller.dart';
 import '../library_failure_message.dart';
 import '../library_share.dart';
 import '../library_state.dart';
+import 'mobile_entry_editor_screen.dart';
 import 'mobile_library_actions.dart';
 
 /// Scroll-safe mobile entry detail route.
@@ -101,6 +102,15 @@ final class _MobileEntryDetailScreenState
       appBar: AppBar(
         title: Text(entry.title),
         actions: [
+          IconButton(
+            key: const Key('mobile-detail-edit'),
+            tooltip: 'Edit',
+            onPressed:
+                _isMutationActive(LibraryMutationKind.updateEntry, entry.id)
+                ? null
+                : () => unawaited(_editEntry(entry)),
+            icon: const Icon(Icons.edit_outlined),
+          ),
           IconButton(
             key: const Key('mobile-detail-favorite'),
             tooltip: entry.isFavorite
@@ -234,6 +244,18 @@ final class _MobileEntryDetailScreenState
   /// Whether one entry mutation is active.
   bool _isMutationActive(LibraryMutationKind kind, String entryId) {
     return _state.isMutationActive(LibraryMutationKey(kind, entityId: entryId));
+  }
+
+  /// Opens the entry editor route.
+  Future<void> _editEntry(Entry entry) {
+    return Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => MobileEntryEditorScreen(
+          controller: widget.controller,
+          entry: entry,
+        ),
+      ),
+    );
   }
 
   /// Toggles the favorite state.

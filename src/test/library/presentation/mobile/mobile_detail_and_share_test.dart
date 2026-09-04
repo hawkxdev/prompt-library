@@ -247,6 +247,35 @@ void main() {
     await disposeApp(tester);
   });
 
+  testWidgets('edits the entry and keeps the detail route open', (
+    tester,
+  ) async {
+    await pumpDetail(tester, title: 'Old title', body: 'Old body');
+
+    await tester.tap(find.byKey(const Key('mobile-detail-edit')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('mobile-entry-editor-screen')), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const Key('editor-title')),
+      'Updated title',
+    );
+    await tester.enterText(
+      find.byKey(const Key('editor-body')),
+      'Updated body',
+    );
+    await tester.tap(find.byKey(const Key('mobile-editor-save')));
+    await pumpState(tester);
+    await tester.pumpAndSettle();
+
+    expect(repository.calls, contains('updateEntry:entry-1'));
+    expect(find.byKey(const Key('mobile-entry-editor-screen')), findsNothing);
+    expect(find.byType(MobileEntryDetailScreen), findsOneWidget);
+    expect(find.text('Updated title'), findsOneWidget);
+    expect(find.text('Updated body'), findsOneWidget);
+    await disposeApp(tester);
+  });
+
   testWidgets('disables archive while its mutation is in flight', (
     tester,
   ) async {

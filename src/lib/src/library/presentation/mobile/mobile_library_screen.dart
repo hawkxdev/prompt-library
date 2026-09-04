@@ -13,6 +13,7 @@ import '../library_failure_message.dart';
 import '../library_haptics.dart';
 import '../library_share.dart';
 import '../library_state.dart';
+import 'mobile_entry_editor_screen.dart';
 import 'mobile_entry_detail_screen.dart';
 import 'mobile_filter_sheet.dart';
 import 'mobile_library_actions.dart';
@@ -88,7 +89,26 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
   /// Builds the mobile scaffold.
   @override
   Widget build(BuildContext context) {
-    return Scaffold(body: SafeArea(child: _buildBody()));
+    return Scaffold(
+      body: SafeArea(child: _buildBody()),
+      floatingActionButton: _state.hasUsableSnapshot
+          ? FloatingActionButton(
+              key: const Key('mobile-create-entry'),
+              tooltip: 'New prompt',
+              onPressed: () => unawaited(_openEditor()),
+              child: const Icon(Icons.add),
+            )
+          : null,
+    );
+  }
+
+  /// Opens the create editor route.
+  Future<void> _openEditor() {
+    return Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => MobileEntryEditorScreen(controller: widget.controller),
+      ),
+    );
   }
 
   /// Builds the observable library state surface.

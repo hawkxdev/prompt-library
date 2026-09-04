@@ -54,10 +54,14 @@ final class EntryEditorFormController extends ChangeNotifier {
 
   Future<void> Function()? _save;
   bool _isSaving;
+  bool _isDirty = false;
   bool _isDisposed = false;
 
   /// Whether saving is active.
   bool get isSaving => _isSaving;
+
+  /// Whether the draft differs.
+  bool get isDirty => _isDirty;
 
   /// Requests one form save.
   Future<void> save() async {
@@ -94,6 +98,13 @@ final class EntryEditorFormController extends ChangeNotifier {
   void _setSaving(bool value) {
     if (_isDisposed || _isSaving == value) return;
     _isSaving = value;
+    notifyListeners();
+  }
+
+  /// Updates observable dirty state.
+  void _setDirty(bool value) {
+    if (_isDisposed || _isDirty == value) return;
+    _isDirty = value;
     notifyListeners();
   }
 
@@ -149,7 +160,13 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
   late StreamSubscription<LibraryState> _subscription;
   String? _categoryId;
   late Set<String> _tagIds;
+  late String _initialTitle;
+  late String _initialBody;
+  late String _initialKeyword;
+  String? _initialCategoryId;
+  late Set<String> _initialTagIds;
   bool _isSaving = false;
+  bool _suppressDirtySync = false;
   String? _error;
 
   /// Initializes draft resources.
@@ -162,10 +179,14 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
     _keyword = TextEditingController(text: entry?.keyword ?? '');
     _categoryId = entry?.categoryId;
     _tagIds = {...?entry?.tagIds};
+    _captureBaseline();
+    _title.addListener(_syncDirty);
+    _body.addListener(_syncDirty);
+    _keyword.addListener(_syncDirty);
     _state = widget.controller.state;
     _subscription = _listenTo(widget.controller);
     widget.formController._bind(_save);
-    _scheduleSavingSync();
+    _scheduleCoordinatorSync();
   }
 
   /// Rebinds changed collaborators.
@@ -184,11 +205,12 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
       oldWidget.formController._unbind(_save);
       widget.formController._bind(_save);
     }
-    _scheduleSavingSync();
+    _scheduleCoordinatorSync();
   }
 
   /// Replaces all draft values.
   void _replaceDraft(Entry? entry) {
+    _suppressDirtySync = true;
     _title.text = entry?.title ?? '';
     _body.text = entry?.body ?? '';
     _keyword.text = entry?.keyword ?? '';
@@ -196,6 +218,17 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
     _tagIds = {...?entry?.tagIds};
     _isSaving = false;
     _error = null;
+    _captureBaseline();
+    _suppressDirtySync = false;
+  }
+
+  /// Captures the current baseline.
+  void _captureBaseline() {
+    _initialTitle = _title.text;
+    _initialBody = _body.text;
+    _initialKeyword = _keyword.text;
+    _initialCategoryId = _categoryId;
+    _initialTagIds = {..._tagIds};
   }
 
   /// Cancels owned draft resources.
@@ -229,12 +262,25 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
     widget.formController._setSaving(_saving);
   }
 
+  /// Publishes effective dirty state.
+  void _syncDirty() {
+    if (_suppressDirtySync) return;
+    widget.formController._setDirty(
+      _title.text != _initialTitle ||
+          _body.text != _initialBody ||
+          _keyword.text != _initialKeyword ||
+          _categoryId != _initialCategoryId ||
+          !_setEquals(_tagIds, _initialTagIds),
+    );
+  }
+
   /// Defers lifecycle saving updates.
-  void _scheduleSavingSync() {
+  void _scheduleCoordinatorSync() {
     final formController = widget.formController;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || widget.formController != formController) return;
       _syncSaving();
+      _syncDirty();
     });
   }
 
@@ -270,7 +316,15 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
       } else {
         await widget.controller.updateEntry(existing.id, input);
       }
-      if (mounted) widget.onSaved();
+      if (!mounted) return;
+      setState(() {
+        _isSaving = false;
+        _error = null;
+        _captureBaseline();
+      });
+      _syncSaving();
+      _syncDirty();
+      widget.onSaved();
     } on LibraryFailure catch (failure) {
       if (!mounted) return;
       setState(() {
@@ -278,7 +332,27 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
         _error = messageForLibraryFailure(failure);
       });
       _syncSaving();
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isSaving = false);
+        _syncSaving();
+      }
+      rethrow;
     }
+  }
+
+  /// Selects the draft category.
+  void _selectCategory(String? value) {
+    setState(() => _categoryId = value);
+    _syncDirty();
+  }
+
+  /// Selects one draft tag.
+  void _selectTag(String id, bool selected) {
+    setState(() {
+      selected ? _tagIds.add(id) : _tagIds.remove(id);
+    });
+    _syncDirty();
   }
 
   /// Builds shared draft fields.
@@ -290,6 +364,7 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
       key: const Key('editor-content'),
       padding: const EdgeInsets.only(top: 14, bottom: 16),
       child: Column(
+        key: const Key('editor-fields'),
         mainAxisSize: MainAxisSize.min,
         children: [
           TextField(
@@ -308,12 +383,14 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
           ),
           const SizedBox(height: 12),
           TextField(
+            key: const Key('editor-keyword'),
             controller: _keyword,
             decoration: const InputDecoration(labelText: 'Keyword'),
           ),
           if (snapshot != null) ...[
             const SizedBox(height: 12),
             DropdownButtonFormField<String?>(
+              key: const Key('editor-category'),
               initialValue: _categoryId,
               decoration: const InputDecoration(labelText: 'Category'),
               items: [
@@ -327,7 +404,7 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
                     child: Text(category.name),
                   ),
               ],
-              onChanged: (value) => setState(() => _categoryId = value),
+              onChanged: _selectCategory,
             ),
             const SizedBox(height: 8),
             Align(
@@ -337,11 +414,10 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
                 children: [
                   for (final tag in snapshot.tags)
                     FilterChip(
+                      key: Key('editor-tag-${tag.id}'),
                       label: Text(tag.name),
                       selected: _tagIds.contains(tag.id),
-                      onSelected: (selected) => setState(() {
-                        selected ? _tagIds.add(tag.id) : _tagIds.remove(tag.id);
-                      }),
+                      onSelected: (selected) => _selectTag(tag.id, selected),
                     ),
                 ],
               ),
@@ -361,4 +437,9 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
       ),
     );
   }
+}
+
+/// Compares string sets.
+bool _setEquals(Set<String> first, Set<String> second) {
+  return first.length == second.length && first.containsAll(second);
 }

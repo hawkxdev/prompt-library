@@ -232,7 +232,7 @@ void main() {
     await disposeApp(tester);
   });
 
-  testWidgets('renders the mobile empty library without a create action', (
+  testWidgets('renders the mobile empty library with a create action', (
     tester,
   ) async {
     await pumpApp(tester);
@@ -242,7 +242,21 @@ void main() {
     expect(find.byKey(const Key('mobile-library-search')), findsOneWidget);
     expect(find.byKey(const Key('mobile-empty-state')), findsOneWidget);
     expect(find.text('Your library is empty'), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'New prompt'), findsNothing);
+    expect(find.byKey(const Key('mobile-create-entry')), findsOneWidget);
+    await disposeApp(tester);
+  });
+
+  testWidgets('opens the create editor from the mobile list', (tester) async {
+    await pumpApp(tester);
+    repository.emit(const LibrarySnapshot.empty());
+    await pumpState(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('mobile-create-entry')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('mobile-entry-editor-screen')), findsOneWidget);
+    expect(find.text('New prompt'), findsOneWidget);
     await disposeApp(tester);
   });
 
