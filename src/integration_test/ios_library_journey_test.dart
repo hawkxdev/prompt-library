@@ -29,6 +29,7 @@ void main() {
     final marker = 'stage5-${DateTime.now().toUtc().microsecondsSinceEpoch}';
     final originalTitle = '$marker original';
     final updatedTitle = '$marker updated';
+    final nonMatchingSearchQuery = '$marker no match';
     const originalBody = '  Stage 5 line one\n\nStage 5 line two  ';
     const updatedBody =
         '  Stage 5 revised line one\n\nStage 5 revised line two  ';
@@ -93,16 +94,29 @@ void main() {
         );
 
         final search = find.byKey(const Key('mobile-library-search'));
+        await tester.enterText(search, nonMatchingSearchQuery);
+        await _pumpUntil(
+          tester,
+          () =>
+              find.text(originalTitle).evaluate().isEmpty &&
+              find.text('No matching prompts').evaluate().isNotEmpty,
+          'empty filtered result',
+        );
         await tester.enterText(search, marker);
         await _pumpUntil(
           tester,
-          () => find.text(originalTitle).evaluate().isNotEmpty,
+          () =>
+              find.text(originalTitle).evaluate().isNotEmpty &&
+              find.text('No matching prompts').evaluate().isEmpty,
           'filtered entry',
         );
         await tester.enterText(search, '');
         await _pumpUntil(
           tester,
-          () => find.text(originalTitle).evaluate().isNotEmpty,
+          () =>
+              tester.widget<TextField>(search).controller!.text.isEmpty &&
+              find.text(originalTitle).evaluate().isNotEmpty &&
+              find.text('No matching prompts').evaluate().isEmpty,
           'cleared search',
         );
 
