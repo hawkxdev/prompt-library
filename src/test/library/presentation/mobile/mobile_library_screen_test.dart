@@ -372,11 +372,13 @@ void main() {
       await tester.showKeyboard(find.byKey(const Key('mobile-library-search')));
       await pumpState(tester);
       expect(_searchHasFocus(tester), isTrue);
+      expect(tester.testTextInput.isVisible, isTrue);
 
-      await tester.tapAt(const Offset(100, 700));
+      await tester.tapAt(_freeListPoint(tester, 'one'));
       await pumpState(tester);
 
       expect(_searchHasFocus(tester), isFalse);
+      expect(tester.testTextInput.isVisible, isFalse);
       await disposeApp(tester);
     });
   });
@@ -397,6 +399,7 @@ void main() {
       await tester.showKeyboard(find.byKey(const Key('mobile-library-search')));
       await pumpState(tester);
       expect(_searchHasFocus(tester), isTrue);
+      expect(tester.testTextInput.isVisible, isTrue);
 
       await tester.tap(find.byKey(const Key('mobile-entry-one')));
       await pumpState(tester);
@@ -404,13 +407,13 @@ void main() {
       expect(clipboard.writes, [body]);
       expect(markCopiedCalls('one'), 1);
       expect(_searchHasFocus(tester), isFalse);
+      expect(tester.testTextInput.isVisible, isFalse);
       await disposeApp(tester);
     });
   });
 
-  testWidgets('keeps the disclosure working while search focus is active', (
-    tester,
-  ) async {
+  testWidgets('opens the detail route from the disclosure while the keyboard '
+      'is up', (tester) async {
     await _withIosPlatform(() async {
       await pumpApp(tester);
       repository.emit(
@@ -1083,15 +1086,25 @@ bool _searchHasFocus(WidgetTester tester) {
   return tester
       .widget<EditableText>(
         find.descendant(
-          of: find.byKey(
-            const Key('mobile-library-search'),
-            skipOffstage: false,
-          ),
-          matching: find.byType(EditableText, skipOffstage: false),
+          of: find.byKey(const Key('mobile-library-search')),
+          matching: find.byType(EditableText),
         ),
       )
       .focusNode
       .hasFocus;
+}
+
+/// Point in the free list area below the last rendered row.
+Offset _freeListPoint(WidgetTester tester, String lastEntryId) {
+  final list = tester.getRect(find.byKey(const Key('mobile-library-list')));
+  final lastRow = tester.getRect(find.byKey(Key('mobile-entry-$lastEntryId')));
+  final point = Offset(list.left + 20, lastRow.bottom + 20);
+  expect(
+    list.contains(point),
+    isTrue,
+    reason: 'free list point $point must stay inside the list $list',
+  );
+  return point;
 }
 
 /// Reads the semantics label of one node.
