@@ -161,6 +161,8 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
               key: const Key('mobile-library-search'),
               controller: _searchController,
               onChanged: widget.controller.updateSearchQuery,
+              onTapOutside: (_) =>
+                  FocusManager.instance.primaryFocus?.unfocus(),
               textInputAction: TextInputAction.search,
               decoration: const InputDecoration(
                 hintText: 'Search prompts',

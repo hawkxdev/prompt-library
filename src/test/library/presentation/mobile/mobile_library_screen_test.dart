@@ -3,6 +3,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompt_library/src/app/application_surface.dart';
@@ -354,6 +355,78 @@ void main() {
     expect(find.text('Alpha prompt'), findsNothing);
     expect(find.text('Bravo prompt'), findsOneWidget);
     await disposeApp(tester);
+  });
+
+  // === Search focus dismissal ===
+
+  testWidgets('clears search focus when the free list area is tapped', (
+    tester,
+  ) async {
+    await _withIosPlatform(() async {
+      await pumpApp(tester);
+      repository.emit(
+        LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+      );
+      await pumpState(tester);
+
+      await tester.showKeyboard(find.byKey(const Key('mobile-library-search')));
+      await pumpState(tester);
+      expect(_searchHasFocus(tester), isTrue);
+
+      await tester.tapAt(const Offset(100, 700));
+      await pumpState(tester);
+
+      expect(_searchHasFocus(tester), isFalse);
+      await disposeApp(tester);
+    });
+  });
+
+  testWidgets('copies the row and clears search focus on the same tap', (
+    tester,
+  ) async {
+    const body = 'exact body';
+    await _withIosPlatform(() async {
+      await pumpApp(tester);
+      repository.emit(
+        LibrarySnapshot(
+          entries: [testEntry('one', title: 'Alpha', body: body)],
+        ),
+      );
+      await pumpState(tester);
+
+      await tester.showKeyboard(find.byKey(const Key('mobile-library-search')));
+      await pumpState(tester);
+      expect(_searchHasFocus(tester), isTrue);
+
+      await tester.tap(find.byKey(const Key('mobile-entry-one')));
+      await pumpState(tester);
+
+      expect(clipboard.writes, [body]);
+      expect(markCopiedCalls('one'), 1);
+      expect(_searchHasFocus(tester), isFalse);
+      await disposeApp(tester);
+    });
+  });
+
+  testWidgets('keeps the disclosure working while search focus is active', (
+    tester,
+  ) async {
+    await _withIosPlatform(() async {
+      await pumpApp(tester);
+      repository.emit(
+        LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+      );
+      await pumpState(tester);
+
+      await tester.showKeyboard(find.byKey(const Key('mobile-library-search')));
+      await pumpState(tester);
+      expect(_searchHasFocus(tester), isTrue);
+
+      await openDetail(tester, 'one');
+
+      expect(find.byType(MobileEntryDetailScreen), findsOneWidget);
+      await disposeApp(tester);
+    });
   });
 
   // === One-tap retrieval ===
@@ -993,6 +1066,32 @@ void main() {
     await tester.runAsync(controller.dispose);
     expect(controller.isDisposed, isTrue);
   });
+}
+
+/// Runs one body under the iOS platform override.
+Future<void> _withIosPlatform(Future<void> Function() body) async {
+  debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+  try {
+    await body();
+  } finally {
+    debugDefaultTargetPlatformOverride = null;
+  }
+}
+
+/// Reads focus state of the mobile search field.
+bool _searchHasFocus(WidgetTester tester) {
+  return tester
+      .widget<EditableText>(
+        find.descendant(
+          of: find.byKey(
+            const Key('mobile-library-search'),
+            skipOffstage: false,
+          ),
+          matching: find.byType(EditableText, skipOffstage: false),
+        ),
+      )
+      .focusNode
+      .hasFocus;
 }
 
 /// Reads the semantics label of one node.
