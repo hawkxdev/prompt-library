@@ -105,6 +105,49 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
   });
 
+  testWidgets('gives the refusal to the blocking field and focuses it', (
+    tester,
+  ) async {
+    final repository = TestLibraryRepository();
+    final controller = LibraryController(repository: repository);
+    addTearDown(() async {
+      await controller.dispose();
+      await repository.close();
+    });
+    repository.emit(const LibrarySnapshot.empty());
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () =>
+                showEntryEditorDialog(context, controller: controller),
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pump();
+    await tester.enterText(find.byKey(const Key('editor-title')), 'Title');
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    // No frame between the tap and the focus assertion: a post-frame focus
+    // request would still be pending here, so this distinguishes the two
+    // versions. The error text needs the rebuild and is asserted after it.
+    await tester.idle();
+    expect(_focusIsInside(const Key('editor-body')), isTrue);
+
+    await tester.pump();
+    final body = tester.widget<TextField>(find.byKey(const Key('editor-body')));
+    expect(body.decoration?.errorText, 'Body is required.');
+    expect(repository.calls, isEmpty);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 1));
+  });
+
   // === Adaptive dialog layout ===
 
   testWidgets('keeps a full body height on a tall surface', (tester) async {
@@ -462,4 +505,19 @@ final class _EditorFormHarnessState extends State<_EditorFormHarness> {
       ),
     );
   }
+}
+
+/// Reports whether primary focus sits inside the keyed subtree.
+bool _focusIsInside(Key key) {
+  final context = FocusManager.instance.primaryFocus?.context;
+  if (context == null) return false;
+  var found = false;
+  context.visitAncestorElements((element) {
+    if (element.widget.key == key) {
+      found = true;
+      return false;
+    }
+    return true;
+  });
+  return found;
 }

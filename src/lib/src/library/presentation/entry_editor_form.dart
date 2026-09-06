@@ -4,6 +4,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 
 import '../models/entry.dart';
 import '../models/entry_input.dart';
@@ -156,6 +157,8 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
   late final TextEditingController _title;
   late final TextEditingController _body;
   late final TextEditingController _keyword;
+  final FocusNode _titleFocus = FocusNode(debugLabel: 'editor-title');
+  final FocusNode _bodyFocus = FocusNode(debugLabel: 'editor-body');
   late LibraryState _state;
   late StreamSubscription<LibraryState> _subscription;
   String? _categoryId;
@@ -167,7 +170,9 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
   late Set<String> _initialTagIds;
   bool _isSaving = false;
   bool _suppressDirtySync = false;
-  String? _error;
+  String? _titleError;
+  String? _bodyError;
+  String? _failure;
 
   /// Initializes draft resources.
   @override
@@ -183,6 +188,8 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
     _title.addListener(_syncDirty);
     _body.addListener(_syncDirty);
     _keyword.addListener(_syncDirty);
+    _title.addListener(_clearResolvedFieldErrors);
+    _body.addListener(_clearResolvedFieldErrors);
     _state = widget.controller.state;
     _subscription = _listenTo(widget.controller);
     widget.formController._bind(_save);
@@ -217,9 +224,35 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
     _categoryId = entry?.categoryId;
     _tagIds = {...?entry?.tagIds};
     _isSaving = false;
-    _error = null;
+    _titleError = null;
+    _bodyError = null;
+    _failure = null;
     _captureBaseline();
     _suppressDirtySync = false;
+  }
+
+  /// Drops a field refusal the user has resolved.
+  void _clearResolvedFieldErrors() {
+    if (_suppressDirtySync) return;
+    final titleResolved = _titleError != null && _title.text.trim().isNotEmpty;
+    final bodyResolved = _bodyError != null && _body.text.trim().isNotEmpty;
+    if (!titleResolved && !bodyResolved) return;
+    setState(() {
+      if (titleResolved) _titleError = null;
+      if (bodyResolved) _bodyError = null;
+    });
+  }
+
+  /// Refuses the save at one field.
+  void _refuseAt(FocusNode focus, {String? title, String? body}) {
+    setState(() {
+      _titleError = title;
+      _bodyError = body;
+      _failure = null;
+    });
+    // Focus is requested synchronously so the blocking field is both announced
+    // and scrolled into view by the framework's own focus handling.
+    focus.requestFocus();
   }
 
   /// Captures the current baseline.
@@ -239,6 +272,8 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
     _title.dispose();
     _body.dispose();
     _keyword.dispose();
+    _titleFocus.dispose();
+    _bodyFocus.dispose();
     super.dispose();
   }
 
@@ -288,11 +323,11 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
   Future<void> _save() async {
     if (_saving) return;
     if (_title.text.trim().isEmpty) {
-      setState(() => _error = 'Title is required.');
+      _refuseAt(_titleFocus, title: 'Title is required.');
       return;
     }
     if (_body.text.trim().isEmpty) {
-      setState(() => _error = 'Body is required.');
+      _refuseAt(_bodyFocus, body: 'Body is required.');
       return;
     }
     final existing = widget.entry;
@@ -307,7 +342,9 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
     );
     setState(() {
       _isSaving = true;
-      _error = null;
+      _titleError = null;
+      _bodyError = null;
+      _failure = null;
     });
     _syncSaving();
     try {
@@ -319,7 +356,7 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
       if (!mounted) return;
       setState(() {
         _isSaving = false;
-        _error = null;
+        _failure = null;
         _captureBaseline();
       });
       _syncSaving();
@@ -329,7 +366,7 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
       if (!mounted) return;
       setState(() {
         _isSaving = false;
-        _error = messageForLibraryFailure(failure);
+        _failure = messageForLibraryFailure(failure);
       });
       _syncSaving();
     } catch (_) {
@@ -367,19 +404,41 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
         key: const Key('editor-fields'),
         mainAxisSize: MainAxisSize.min,
         children: [
-          TextField(
-            key: const Key('editor-title'),
-            controller: _title,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: 'Title'),
+          // The refusal belongs to the field that blocks the save: the error
+          // text is announced together with the field's own label, and the
+          // validation result carries the state to the platform without
+          // relying on color.
+          Semantics(
+            validationResult: _titleError == null
+                ? SemanticsValidationResult.none
+                : SemanticsValidationResult.invalid,
+            child: TextField(
+              key: const Key('editor-title'),
+              controller: _title,
+              focusNode: _titleFocus,
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: 'Title',
+                errorText: _titleError,
+              ),
+            ),
           ),
           const SizedBox(height: 12),
-          TextField(
-            key: const Key('editor-body'),
-            controller: _body,
-            minLines: bodySize.minLines,
-            maxLines: bodySize.maxLines,
-            decoration: const InputDecoration(labelText: 'Body'),
+          Semantics(
+            validationResult: _bodyError == null
+                ? SemanticsValidationResult.none
+                : SemanticsValidationResult.invalid,
+            child: TextField(
+              key: const Key('editor-body'),
+              controller: _body,
+              focusNode: _bodyFocus,
+              minLines: bodySize.minLines,
+              maxLines: bodySize.maxLines,
+              decoration: InputDecoration(
+                labelText: 'Body',
+                errorText: _bodyError,
+              ),
+            ),
           ),
           const SizedBox(height: 12),
           TextField(
@@ -426,13 +485,19 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
               ),
             ),
           ],
-          if (_error != null) ...[
+          // A persistence failure has no field to blame, so it keeps the
+          // summary, and announces itself because nothing else will.
+          if (_failure != null) ...[
             const SizedBox(height: 12),
             Align(
               alignment: Alignment.centerLeft,
-              child: Text(
-                _error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              child: Semantics(
+                liveRegion: true,
+                child: Text(
+                  _failure!,
+                  key: const Key('editor-failure'),
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
               ),
             ),
           ],
