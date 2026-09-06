@@ -421,6 +421,121 @@ void main() {
     expect(action.size.width, closeTo(actionUnconstrained.width, 1));
   });
 
+  testWidgets('gives the refusal to the blocking field, not to a summary', (
+    tester,
+  ) async {
+    repository.emit(const LibrarySnapshot.empty());
+    await pumpEditor(tester);
+    await tester.enterText(find.byKey(const Key('editor-title')), 'Title');
+
+    await tester.tap(find.byKey(const Key('mobile-editor-save')));
+    await tester.pump();
+
+    // The message must belong to the field that blocks the save. Asserting
+    // that the text exists somewhere passes on the pre-stage version too,
+    // because a summary at the end of the form carries the same string.
+    final body = tester.widget<TextField>(find.byKey(const Key('editor-body')));
+    final title = tester.widget<TextField>(
+      find.byKey(const Key('editor-title')),
+    );
+    expect(body.decoration?.errorText, 'Body is required.');
+    expect(title.decoration?.errorText, isNull);
+    expect(repository.calls, isEmpty);
+  });
+
+  testWidgets('moves focus to the first unfilled field without a frame', (
+    tester,
+  ) async {
+    repository.emit(const LibrarySnapshot.empty());
+    await pumpEditor(tester);
+    await tester.enterText(find.byKey(const Key('editor-title')), 'Title');
+
+    await tester.tap(find.byKey(const Key('mobile-editor-save')));
+    // idle() drains microtasks without producing a frame, so a post-frame
+    // focus request stays pending here while a synchronous one takes effect.
+    await tester.idle();
+
+    expect(
+      _focusIsInside(const Key('editor-body')),
+      isTrue,
+      reason: 'the blocking field must hold focus right after the refusal',
+    );
+  });
+
+  testWidgets('announces the refusal on the field node itself', (tester) async {
+    final handle = tester.ensureSemantics();
+    repository.emit(const LibrarySnapshot.empty());
+    await pumpEditor(tester);
+    await tester.enterText(find.byKey(const Key('editor-title')), 'Title');
+
+    await tester.tap(find.byKey(const Key('mobile-editor-save')));
+    await tester.pump();
+
+    // getSemantics on the field returns an unmerged node with empty label and
+    // hint even when the framework does announce the error, so the walk below
+    // is what actually observes the announcement.
+    final fields = _textFieldSemantics(tester);
+    final blocked = fields.singleWhere((data) => data.label.contains('Body'));
+    expect(blocked.hint, contains('Body is required.'));
+    expect(blocked.validationResult, SemanticsValidationResult.invalid);
+    handle.dispose();
+  });
+
+  testWidgets('clears the field refusal once the field is filled', (
+    tester,
+  ) async {
+    repository.emit(const LibrarySnapshot.empty());
+    await pumpEditor(tester);
+    await tester.enterText(find.byKey(const Key('editor-title')), 'Title');
+    await tester.tap(find.byKey(const Key('mobile-editor-save')));
+    await tester.pump();
+
+    await tester.enterText(find.byKey(const Key('editor-body')), 'Body');
+    await tester.pump();
+
+    final body = tester.widget<TextField>(find.byKey(const Key('editor-body')));
+    expect(body.decoration?.errorText, isNull);
+  });
+
+  testWidgets('announces a persistence failure as a live region', (
+    tester,
+  ) async {
+    final handle = tester.ensureSemantics();
+    repository.emit(const LibrarySnapshot.empty());
+    await pumpEditor(tester);
+    await enterRequiredDraft(tester);
+    repository.nextFailure = const LibraryFailure.databaseFailure(
+      code: LibraryDatabaseFailureCode.transactionFailed,
+    );
+
+    await tester.tap(find.byKey(const Key('mobile-editor-save')));
+    await pumpState(tester);
+
+    final message = tester.getSemantics(
+      find.text('The library could not save this change.'),
+    );
+    expect(message.flagsCollection.isLiveRegion, isTrue);
+    handle.dispose();
+  });
+
+  testWidgets('keeps validation out of the persistence summary', (
+    tester,
+  ) async {
+    repository.emit(const LibrarySnapshot.empty());
+    await pumpEditor(tester);
+
+    await tester.tap(find.byKey(const Key('mobile-editor-save')));
+    await tester.pump();
+
+    // A refusal owned by a field must not also render the bottom summary:
+    // two owners for one message is what made the refusal unreadable.
+    expect(find.byKey(const Key('editor-failure')), findsNothing);
+    final title = tester.widget<TextField>(
+      find.byKey(const Key('editor-title')),
+    );
+    expect(title.decoration?.errorText, 'Title is required.');
+  });
+
   testWidgets('preserves exact body and taxonomy assignments', (tester) async {
     const exactBody = '  leading\nand trailing  ';
     repository.emit(
@@ -451,4 +566,37 @@ void main() {
 /// Renders whitespace visibly.
 String _escape(String value) {
   return value.replaceAll(' ', '<sp>').replaceAll('\n', '<nl>');
+}
+
+/// Reports whether primary focus sits inside the keyed subtree.
+bool _focusIsInside(Key key) {
+  final context = FocusManager.instance.primaryFocus?.context;
+  if (context == null) return false;
+  var found = false;
+  context.visitAncestorElements((element) {
+    if (element.widget.key == key) {
+      found = true;
+      return false;
+    }
+    return true;
+  });
+  return found;
+}
+
+/// Collects semantics of every rendered text field.
+List<SemanticsData> _textFieldSemantics(WidgetTester tester) {
+  final collected = <SemanticsData>[];
+  void walk(SemanticsNode node) {
+    final data = node.getSemanticsData();
+    if (data.flagsCollection.isTextField) {
+      collected.add(data);
+    }
+    node.visitChildren((child) {
+      walk(child);
+      return true;
+    });
+  }
+
+  walk(tester.semantics.find(find.byKey(const Key('mobile-editor-body'))));
+  return collected;
 }
