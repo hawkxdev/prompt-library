@@ -5,6 +5,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompt_library/src/app/application_surface.dart';
 import 'package:prompt_library/src/app/prompt_library_app.dart';
@@ -653,6 +654,50 @@ void main() {
     handle.dispose();
   });
 
+  testWidgets('announces the retrieval surface in a usable order', (
+    tester,
+  ) async {
+    final handle = tester.ensureSemantics();
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+
+    final labels = _traversalLabels(tester);
+    final searchIndex = labels.indexWhere((label) => label.contains('Search'));
+    final rowIndex = labels.indexOf('Alpha');
+    final disclosureIndex = labels.indexOf('Open details for Alpha');
+
+    expect(searchIndex, isNonNegative, reason: 'search must be announced');
+    expect(rowIndex, isNonNegative, reason: 'the entry must be announced');
+    expect(
+      disclosureIndex,
+      isNonNegative,
+      reason: 'the disclosure must be announced separately from the row',
+    );
+    // Search comes before the results it filters, and the row is reached
+    // before the disclosure that belongs to it.
+    expect(searchIndex, lessThan(rowIndex));
+    expect(rowIndex, lessThan(disclosureIndex));
+
+    // Icon-only controls announce their tooltip rather than a label, so a
+    // transcript built from labels alone would silently omit them.
+    expect(
+      tester
+          .getSemantics(find.byKey(const Key('mobile-filter-button')))
+          .tooltip,
+      'Filters',
+    );
+    expect(
+      tester.getSemantics(find.byKey(const Key('mobile-create-entry'))).tooltip,
+      'New prompt',
+    );
+
+    await disposeApp(tester);
+    handle.dispose();
+  });
+
   testWidgets('scrolls a long body inside the outer detail scroll view', (
     tester,
   ) async {
@@ -1105,6 +1150,29 @@ Offset _freeListPoint(WidgetTester tester, String lastEntryId) {
     reason: 'free list point $point must stay inside the list $list',
   );
   return point;
+}
+
+/// Collects labelled semantics in traversal order.
+///
+/// This is an ordering probe, not a transcript. It reaches nodes that carry a
+/// label, which is enough to assert relative order, and claims nothing more:
+/// icon-only controls expose their text through a separate tooltip field this
+/// walk does not reach, and the role a reader speaks on top of a label is a
+/// system concern no widget test can observe.
+List<String> _traversalLabels(WidgetTester tester) {
+  final labels = <String>[];
+  void visit(SemanticsNode node) {
+    final data = node.getSemanticsData();
+    final label = data.label.trim();
+    if (label.isNotEmpty) labels.add(label);
+    node.visitChildren((child) {
+      visit(child);
+      return true;
+    });
+  }
+
+  visit(tester.getSemantics(find.byType(MaterialApp)));
+  return labels;
 }
 
 /// Reads the semantics label of one node.
