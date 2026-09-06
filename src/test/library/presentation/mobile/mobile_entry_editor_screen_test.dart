@@ -4,6 +4,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompt_library/src/library/models/entry.dart';
 import 'package:prompt_library/src/library/models/library_failure.dart';
@@ -356,6 +357,68 @@ void main() {
     expect(find.byKey(const Key('mobile-editor-save')), findsOneWidget);
     expect(find.byKey(const Key('mobile-editor-cancel')), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('keeps the category row inside the form at accessibility scale', (
+    tester,
+  ) async {
+    tester.platformDispatcher.textScaleFactorTestValue = 3.1;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    repository.emit(
+      LibrarySnapshot(
+        categories: [testCategory('category-1', 'Agents and assistants')],
+      ),
+    );
+    await pumpEditor(tester);
+
+    await tester.ensureVisible(find.byKey(const Key('editor-category')));
+    await tester.pump();
+
+    final form = tester.getRect(find.byKey(const Key('mobile-editor-body')));
+    final category = tester.getRect(find.byKey(const Key('editor-category')));
+    expect(category.right, lessThanOrEqualTo(form.right));
+    expect(category.left, greaterThanOrEqualTo(form.left));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('keeps the cancel label on one line at accessibility scale', (
+    tester,
+  ) async {
+    tester.platformDispatcher.textScaleFactorTestValue = 3.1;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    repository.emit(const LibrarySnapshot.empty());
+    await pumpEditor(tester);
+
+    // Height alone does not differentiate: an ellipsis keeps the label on one
+    // line while still hiding characters. Compare the painted width with the
+    // width the same span needs unconstrained — a clipped label is narrower.
+    final label = tester.renderObject<RenderParagraph>(find.text('Cancel'));
+    final unconstrained = TextPainter(
+      text: label.text,
+      textDirection: TextDirection.ltr,
+      textScaler: label.textScaler,
+    )..layout();
+    addTearDown(unconstrained.dispose);
+
+    expect(label.size.width, closeTo(unconstrained.width, 1));
+    expect(
+      label.size.width,
+      lessThanOrEqualTo(
+        tester.getSize(find.byKey(const Key('mobile-editor-cancel'))).width,
+      ),
+    );
+
+    // The save action shares the same bar. Widening the leading without a cap
+    // on bar text growth pushes it out, so assert it is unclipped too.
+    final action = tester.renderObject<RenderParagraph>(find.text('Save'));
+    final actionUnconstrained = TextPainter(
+      text: action.text,
+      textDirection: TextDirection.ltr,
+      textScaler: action.textScaler,
+    )..layout();
+    addTearDown(actionUnconstrained.dispose);
+
+    expect(action.size.width, closeTo(actionUnconstrained.width, 1));
   });
 
   testWidgets('preserves exact body and taxonomy assignments', (tester) async {

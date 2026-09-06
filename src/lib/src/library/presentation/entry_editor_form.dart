@@ -393,15 +393,18 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
               key: const Key('editor-category'),
               initialValue: _categoryId,
               decoration: const InputDecoration(labelText: 'Category'),
+              // The selected label is laid out next to the arrow, so at large
+              // text scales an intrinsic-width item overflows the field.
+              isExpanded: true,
               items: [
                 const DropdownMenuItem(
                   value: null,
-                  child: Text('Uncategorized'),
+                  child: Text('Uncategorized', overflow: TextOverflow.ellipsis),
                 ),
                 for (final category in snapshot.categories)
                   DropdownMenuItem(
                     value: category.id,
-                    child: Text(category.name),
+                    child: Text(category.name, overflow: TextOverflow.ellipsis),
                   ),
               ],
               onChanged: _selectCategory,

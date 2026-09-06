@@ -125,6 +125,18 @@ final class _MobileEntryEditorScreenState
     unawaited(_requestCancel());
   }
 
+  /// Resolves leading width that keeps the cancel label unclipped.
+  ///
+  /// The default width already leaves room for the button's own padding at
+  /// standard text size, so the padding is added back only while scaling up.
+  double _leadingWidth(BuildContext context) {
+    const baseWidth = 92.0;
+    const buttonPadding = 24.0;
+    final scaled = MediaQuery.textScalerOf(context).scale(baseWidth);
+    if (scaled <= baseWidth) return baseWidth;
+    return scaled + buttonPadding;
+  }
+
   /// Builds mobile editor shell.
   @override
   Widget build(BuildContext context) {
@@ -138,11 +150,15 @@ final class _MobileEntryEditorScreenState
           child: Scaffold(
             key: const Key('mobile-entry-editor-screen'),
             appBar: AppBar(
-              leadingWidth: 92,
+              leadingWidth: _leadingWidth(context),
               leading: TextButton(
                 key: const Key('mobile-editor-cancel'),
                 onPressed: isSaving ? null : _requestCancel,
-                child: const Text('Cancel'),
+                child: const Text(
+                  'Cancel',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
               title: Text(
                 widget.entry == null ? 'New prompt' : 'Edit prompt',
