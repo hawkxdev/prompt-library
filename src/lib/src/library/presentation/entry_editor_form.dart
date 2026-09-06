@@ -486,7 +486,7 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
             ),
           ],
           // A persistence failure has no field to blame, so it keeps the
-          // summary — and announces itself, because nothing else will.
+          // summary, and announces itself because nothing else will.
           if (_failure != null) ...[
             const SizedBox(height: 12),
             Align(
