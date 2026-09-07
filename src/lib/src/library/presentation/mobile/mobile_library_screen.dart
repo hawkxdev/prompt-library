@@ -373,8 +373,12 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
                     : Icons.star_border_rounded,
               ),
               const SizedBox(width: 12),
-              Text(
-                entry.isFavorite ? 'Remove from favorites' : 'Add to favorites',
+              Expanded(
+                child: Text(
+                  entry.isFavorite
+                      ? 'Remove from favorites'
+                      : 'Add to favorites',
+                ),
               ),
             ],
           ),
@@ -391,7 +395,7 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
                     : Icons.archive_outlined,
               ),
               const SizedBox(width: 12),
-              Text(entry.isArchived ? 'Restore' : 'Archive'),
+              Expanded(child: Text(entry.isArchived ? 'Restore' : 'Archive')),
             ],
           ),
         ),
@@ -403,7 +407,7 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
             children: [
               Icon(Icons.delete_outline),
               SizedBox(width: 12),
-              Text('Delete'),
+              Expanded(child: Text('Delete')),
             ],
           ),
         ),

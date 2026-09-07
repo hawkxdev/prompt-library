@@ -1343,6 +1343,207 @@ void main() {
       await disposeApp(tester);
     },
   );
+
+  testWidgets(
+    'anchors the row menu to the row geometry rather than a fixed point',
+    (tester) async {
+      await pumpApp(tester);
+      repository.emit(
+        LibrarySnapshot(
+          entries: [
+            testEntry('one', title: 'Alpha'),
+            testEntry('two', title: 'Beta'),
+            testEntry('three', title: 'Gamma'),
+          ],
+        ),
+      );
+      await pumpState(tester);
+
+      /// Opens the menu on one row and returns where the menu was drawn.
+      Future<Rect> menuRectFor(String id) async {
+        await tester.longPress(find.byKey(Key('mobile-entry-$id')));
+        await tester.pumpAndSettle();
+        final rect = tester.getRect(
+          find.byKey(const Key('mobile-row-action-favorite')),
+        );
+        await tester.tapAt(const Offset(10, 10));
+        await tester.pumpAndSettle();
+        return rect;
+      }
+
+      final firstRow = tester.getRect(
+        find.byKey(const Key('mobile-entry-one')),
+      );
+      final thirdRow = tester.getRect(
+        find.byKey(const Key('mobile-entry-three')),
+      );
+      final rowGap = thirdRow.top - firstRow.top;
+      expect(rowGap, greaterThan(0));
+
+      final firstMenu = await menuRectFor('one');
+      final thirdMenu = await menuRectFor('three');
+
+      // A menu pinned to a constant point would land identically for both rows.
+      expect(
+        thirdMenu.top - firstMenu.top,
+        closeTo(rowGap, 1),
+        reason: 'menu offset must track the pressed row, not a fixed point',
+      );
+
+      await disposeApp(tester);
+    },
+  );
+
+  testWidgets(
+    'treats a mutation started by another owner as pending for the row menu',
+    (tester) async {
+      await pumpApp(tester);
+      repository.emit(
+        LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+      );
+      await pumpState(tester);
+
+      // A second actions instance over the same controller stands for any other
+      // surface holding the entry: the row must see its mutation as pending.
+      final foreignActions = MobileLibraryActions(
+        controller: controller,
+        clipboard: clipboard,
+        share: const UnavailableLibraryShare(),
+        haptics: haptics,
+      );
+      final gate = Completer<void>();
+      repository.nextMutationGate = gate;
+      unawaited(foreignActions.setFavorite(testEntry('one', title: 'Alpha')));
+      await tester.pump();
+
+      await tester.longPress(find.byKey(const Key('mobile-entry-one')));
+      await tester.pumpAndSettle();
+
+      final favoriteItem = tester.widget<PopupMenuItem<dynamic>>(
+        find.byKey(const Key('mobile-row-action-favorite')),
+      );
+      expect(
+        favoriteItem.enabled,
+        isFalse,
+        reason: 'pending raised through the controller must disable the item',
+      );
+
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+      gate.complete();
+      await pumpState(tester);
+      await disposeApp(tester);
+    },
+  );
+
+  testWidgets('labels the favorite action by the current entry state', (
+    tester,
+  ) async {
+    final handle = tester.ensureSemantics();
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(
+        entries: [testEntry('one', title: 'Alpha', isFavorite: true)],
+      ),
+    );
+    await pumpState(tester);
+
+    final node = find.semantics
+        .byLabel('Alpha')
+        .evaluate()
+        .single
+        .getSemanticsData();
+    final labels = (node.customSemanticsActionIds ?? const <int>[])
+        .map((id) => CustomSemanticsAction.getAction(id)?.label)
+        .toList();
+    expect(
+      labels,
+      contains('Remove from favorites'),
+      reason: 'a favorite entry must offer removal, not addition',
+    );
+
+    await tester.longPress(find.byKey(const Key('mobile-entry-one')));
+    await tester.pumpAndSettle();
+    expect(find.text('Remove from favorites'), findsOneWidget);
+
+    handle.dispose();
+    await disposeApp(tester);
+  });
+
+  testWidgets('labels the archive action by the current entry state', (
+    tester,
+  ) async {
+    final handle = tester.ensureSemantics();
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(
+        entries: [testEntry('one', title: 'Alpha', isArchived: true)],
+      ),
+    );
+    await pumpState(tester);
+
+    await openFilters(tester);
+    await tester.tap(find.byKey(const Key('mobile-mode-archived')));
+    await pumpState(tester);
+    await closeFilters(tester);
+
+    final node = find.semantics
+        .byLabel('Alpha')
+        .evaluate()
+        .single
+        .getSemanticsData();
+    final labels = (node.customSemanticsActionIds ?? const <int>[])
+        .map((id) => CustomSemanticsAction.getAction(id)?.label)
+        .toList();
+    expect(
+      labels,
+      contains('Restore'),
+      reason: 'an archived entry must offer Restore, not Archive',
+    );
+
+    handle.dispose();
+    await disposeApp(tester);
+  });
+
+  testWidgets('keeps the copy contract under real gesture sequences', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+
+    final rowCenter = tester.getCenter(
+      find.byKey(const Key('mobile-entry-one')),
+    );
+
+    // A real hold goes through the gesture arena, unlike tester.longPress.
+    final hold = await tester.startGesture(rowCenter);
+    await tester.pump(const Duration(milliseconds: 700));
+    await hold.up();
+    await tester.pumpAndSettle();
+    expect(
+      clipboard.writes,
+      isEmpty,
+      reason: 'a real long press must not copy',
+    );
+    expect(find.byKey(const Key('mobile-row-action-delete')), findsOneWidget);
+
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pumpAndSettle();
+
+    // A drag that begins as a hold belongs to the list, not to either action.
+    final drag = await tester.startGesture(rowCenter);
+    await tester.pump(const Duration(milliseconds: 100));
+    await drag.moveBy(const Offset(0, -120));
+    await drag.up();
+    await tester.pumpAndSettle();
+    expect(clipboard.writes, isEmpty);
+    expect(find.byKey(const Key('mobile-row-action-delete')), findsNothing);
+
+    await disposeApp(tester);
+  });
 }
 
 /// Runs one body under the iOS platform override.
