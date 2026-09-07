@@ -13,6 +13,7 @@ import 'package:prompt_library/src/library/models/library_failure.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
+import 'package:prompt_library/src/library/presentation/library_failure_message.dart';
 import 'package:prompt_library/src/library/presentation/library_filter.dart';
 import 'package:prompt_library/src/library/presentation/library_haptics.dart';
 import 'package:prompt_library/src/library/presentation/library_share.dart';
@@ -1114,6 +1115,234 @@ void main() {
     await tester.runAsync(controller.dispose);
     expect(controller.isDisposed, isTrue);
   });
+
+  testWidgets(
+    'long press on primary row area opens context menu with 3 items while single tap copies',
+    (tester) async {
+      await pumpApp(tester);
+      repository.emit(
+        LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+      );
+      await pumpState(tester);
+
+      // Single tap copies and does not show menu
+      await tester.tap(find.byKey(const Key('mobile-entry-one')));
+      await pumpState(tester);
+      expect(clipboard.writes, hasLength(1));
+      expect(find.byKey(const Key('mobile-row-action-favorite')), findsNothing);
+      expect(find.byKey(const Key('mobile-row-action-archive')), findsNothing);
+      expect(find.byKey(const Key('mobile-row-action-delete')), findsNothing);
+
+      // Long press opens menu without copying again
+      await tester.longPress(find.byKey(const Key('mobile-entry-one')));
+      await tester.pumpAndSettle();
+
+      expect(clipboard.writes, hasLength(1));
+      expect(
+        find.byKey(const Key('mobile-row-action-favorite')),
+        findsOneWidget,
+      );
+      expect(find.text('Add to favorites'), findsOneWidget);
+      expect(
+        find.byKey(const Key('mobile-row-action-archive')),
+        findsOneWidget,
+      );
+      expect(find.text('Archive'), findsOneWidget);
+      expect(find.byKey(const Key('mobile-row-action-delete')), findsOneWidget);
+      expect(find.text('Delete'), findsOneWidget);
+
+      // Tap favorite action from menu
+      await tester.tap(find.byKey(const Key('mobile-row-action-favorite')));
+      await pumpState(tester);
+
+      expect(repository.calls, contains('setFavorite:one:true'));
+      await disposeApp(tester);
+    },
+  );
+
+  testWidgets(
+    'confirms deletion from row context menu, and cancelling confirmation makes zero controller calls',
+    (tester) async {
+      await pumpApp(tester);
+      repository.emit(
+        LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+      );
+      await pumpState(tester);
+
+      // Long press and select delete
+      await tester.longPress(find.byKey(const Key('mobile-entry-one')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('mobile-row-action-delete')));
+      await tester.pump();
+
+      expect(find.text('Delete prompt?'), findsOneWidget);
+
+      // Cancel deletion
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(
+        repository.calls.where((call) => call.startsWith('deleteEntry')),
+        isEmpty,
+      );
+      expect(find.byKey(const Key('mobile-entry-one')), findsOneWidget);
+
+      // Long press again and confirm deletion
+      await tester.longPress(find.byKey(const Key('mobile-entry-one')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('mobile-row-action-delete')));
+      await tester.pump();
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await pumpState(tester);
+
+      expect(repository.calls, contains('deleteEntry:one'));
+      await disposeApp(tester);
+    },
+  );
+
+  testWidgets(
+    'announces and executes custom semantics actions on the row node matching menu handlers',
+    (tester) async {
+      final handle = tester.ensureSemantics();
+      await pumpApp(tester);
+      repository.emit(
+        LibrarySnapshot(
+          entries: [
+            testEntry('one', title: 'Alpha'),
+            testEntry('two', title: 'Beta'),
+            testEntry('three', title: 'Gamma'),
+          ],
+        ),
+      );
+      await pumpState(tester);
+
+      final rowSemantics = tester.getSemantics(
+        find.byKey(const Key('mobile-entry-one')),
+      );
+      final actionIds = rowSemantics
+          .getSemanticsData()
+          .customSemanticsActionIds;
+      expect(actionIds, isNotNull);
+      expect(actionIds, hasLength(3));
+
+      final customActions = actionIds!
+          .map(CustomSemanticsAction.getAction)
+          .nonNulls
+          .toList();
+      expect(customActions.map((a) => a.label).toList(), [
+        'Add to favorites',
+        'Archive',
+        'Delete',
+      ]);
+
+      // Execute favorite on Alpha
+      tester.semantics.performAction(
+        find.semantics.byLabel('Alpha'),
+        SemanticsAction.customAction,
+        args: CustomSemanticsAction.getIdentifier(customActions[0]),
+      );
+      await pumpState(tester);
+      expect(repository.calls, contains('setFavorite:one:true'));
+
+      // Execute archive on Beta
+      tester.semantics.performAction(
+        find.semantics.byLabel('Beta'),
+        SemanticsAction.customAction,
+        args: CustomSemanticsAction.getIdentifier(customActions[1]),
+      );
+      await pumpState(tester);
+      expect(repository.calls, contains('setArchived:two:true'));
+
+      // Execute delete on Gamma
+      tester.semantics.performAction(
+        find.semantics.byLabel('Gamma'),
+        SemanticsAction.customAction,
+        args: CustomSemanticsAction.getIdentifier(customActions[2]),
+      );
+      await tester.pump();
+      expect(find.text('Delete prompt?'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await pumpState(tester);
+      expect(repository.calls, contains('deleteEntry:three'));
+
+      handle.dispose();
+      await disposeApp(tester);
+    },
+  );
+
+  testWidgets(
+    'disables active row menu action during in-flight mutation while row remains copyable',
+    (tester) async {
+      await pumpApp(tester);
+      repository.emit(
+        LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+      );
+      await pumpState(tester);
+
+      final gate = Completer<void>();
+      repository.nextMutationGate = gate;
+
+      // Start favorite mutation
+      await tester.longPress(find.byKey(const Key('mobile-entry-one')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('mobile-row-action-favorite')));
+      await tester.pump();
+
+      // Open menu while favorite is in flight
+      await tester.longPress(find.byKey(const Key('mobile-entry-one')));
+      await tester.pumpAndSettle();
+
+      final favoriteItem = tester.widget<PopupMenuItem<dynamic>>(
+        find.byKey(const Key('mobile-row-action-favorite')),
+      );
+      expect(favoriteItem.enabled, isFalse);
+
+      // Close menu by tapping outside
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+
+      // Row remains copyable during active mutation
+      await tester.tap(find.byKey(const Key('mobile-entry-one')));
+      await pumpState(tester);
+      expect(clipboard.writes, hasLength(1));
+
+      gate.complete();
+      await pumpState(tester);
+      await disposeApp(tester);
+    },
+  );
+
+  testWidgets(
+    'displays mutation failure in the mobile failure banner when row action fails',
+    (tester) async {
+      await pumpApp(tester);
+      repository.emit(
+        LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+      );
+      await pumpState(tester);
+
+      const failure = DatabaseFailureLibraryFailure(
+        code: LibraryDatabaseFailureCode.transactionFailed,
+      );
+      repository.nextFailure = failure;
+
+      await tester.longPress(find.byKey(const Key('mobile-entry-one')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('mobile-row-action-favorite')));
+      await pumpState(tester);
+
+      expect(find.byType(MaterialBanner), findsOneWidget);
+      expect(find.text(messageForLibraryFailure(failure)), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Dismiss'));
+      await pumpState(tester);
+      expect(find.byType(MaterialBanner), findsNothing);
+
+      await disposeApp(tester);
+    },
+  );
 }
 
 /// Runs one body under the iOS platform override.
