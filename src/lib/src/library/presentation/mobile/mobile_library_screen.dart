@@ -4,9 +4,11 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 
 import '../../models/entry.dart';
 import '../../models/library_failure.dart';
+import '../delete_entry_dialog.dart';
 import '../library_clipboard.dart';
 import '../library_controller.dart';
 import '../library_failure_message.dart';
@@ -45,6 +47,9 @@ final class MobileLibraryScreen extends StatefulWidget {
   @override
   State<MobileLibraryScreen> createState() => _MobileLibraryScreenState();
 }
+
+/// Actions available from the mobile row context menu.
+enum _MobileRowAction { favorite, archive, delete }
 
 /// Owns screen-local search, subscription, mode and actions.
 final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
@@ -215,36 +220,59 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
             label: entry.title,
             hint: pending ? 'Copying' : 'Copy prompt',
             excludeSemantics: true,
-            child: InkWell(
-              key: Key('mobile-entry-${entry.id}'),
-              onTap: () => unawaited(_handleCopy(entry)),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(minHeight: 48),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          entry.title,
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                      if (entry.isFavorite)
-                        const Icon(Icons.star_rounded, size: 18),
-                      if (pending)
-                        const Padding(
-                          padding: EdgeInsets.only(left: 10),
-                          child: SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+            customSemanticsActions: {
+              CustomSemanticsAction(
+                label: entry.isFavorite
+                    ? 'Remove from favorites'
+                    : 'Add to favorites',
+              ): () =>
+                  unawaited(_handleFavorite(entry)),
+              CustomSemanticsAction(
+                label: entry.isArchived ? 'Restore' : 'Archive',
+              ): () =>
+                  unawaited(_handleArchive(entry)),
+              const CustomSemanticsAction(label: 'Delete'): () =>
+                  unawaited(_confirmAndDelete(entry)),
+            },
+            child: Builder(
+              builder: (rowContext) {
+                return InkWell(
+                  key: Key('mobile-entry-${entry.id}'),
+                  onTap: () => unawaited(_handleCopy(entry)),
+                  onLongPress: () => unawaited(_showRowMenu(rowContext, entry)),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 48),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              entry.title,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ),
-                        ),
-                    ],
+                          if (entry.isFavorite)
+                            const Icon(Icons.star_rounded, size: 18),
+                          if (pending)
+                            const Padding(
+                              padding: EdgeInsets.only(left: 10),
+                              child: SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
-              ),
+                );
+              },
             ),
           ),
         ),
@@ -264,6 +292,139 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
         ),
       ],
     );
+  }
+
+  /// Toggles favorite for one entry from the mobile surface.
+  Future<void> _handleFavorite(Entry entry) {
+    if (_actions.isActionPending(entry.id, LibraryMutationKind.setFavorite)) {
+      return Future.value();
+    }
+    return _actions.setFavorite(entry);
+  }
+
+  /// Toggles archive for one entry from the mobile surface.
+  Future<void> _handleArchive(Entry entry) {
+    if (_actions.isActionPending(entry.id, LibraryMutationKind.setArchived)) {
+      return Future.value();
+    }
+    return _actions.setArchived(entry);
+  }
+
+  /// Confirms and deletes one entry from the mobile surface.
+  Future<void> _confirmAndDelete(Entry entry) async {
+    if (_actions.isActionPending(entry.id, LibraryMutationKind.deleteEntry)) {
+      return;
+    }
+    final confirmed = await showDeleteEntryDialog(context, entry: entry);
+    if (!confirmed || !mounted) {
+      return;
+    }
+    await _actions.deleteEntry(entry);
+  }
+
+  /// Shows the long-press context menu positioned from row geometry.
+  Future<void> _showRowMenu(BuildContext rowContext, Entry entry) async {
+    final renderBox = rowContext.findRenderObject();
+    if (renderBox is! RenderBox || !renderBox.hasSize) {
+      return;
+    }
+    final overlay = Overlay.maybeOf(rowContext)?.context.findRenderObject();
+    if (overlay is! RenderBox || !overlay.hasSize) {
+      return;
+    }
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        renderBox.localToGlobal(Offset.zero, ancestor: overlay),
+        renderBox.localToGlobal(
+          renderBox.size.bottomRight(Offset.zero),
+          ancestor: overlay,
+        ),
+      ),
+      Offset.zero & overlay.size,
+    );
+
+    final favoritePending = _actions.isActionPending(
+      entry.id,
+      LibraryMutationKind.setFavorite,
+    );
+    final archivePending = _actions.isActionPending(
+      entry.id,
+      LibraryMutationKind.setArchived,
+    );
+    final deletePending = _actions.isActionPending(
+      entry.id,
+      LibraryMutationKind.deleteEntry,
+    );
+
+    final action = await showMenu<_MobileRowAction>(
+      context: rowContext,
+      position: position,
+      constraints: const BoxConstraints(minWidth: 160, maxWidth: 300),
+      items: [
+        PopupMenuItem<_MobileRowAction>(
+          key: const Key('mobile-row-action-favorite'),
+          value: _MobileRowAction.favorite,
+          enabled: !favoritePending,
+          child: Row(
+            children: [
+              Icon(
+                entry.isFavorite
+                    ? Icons.star_rounded
+                    : Icons.star_border_rounded,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  entry.isFavorite
+                      ? 'Remove from favorites'
+                      : 'Add to favorites',
+                ),
+              ),
+            ],
+          ),
+        ),
+        PopupMenuItem<_MobileRowAction>(
+          key: const Key('mobile-row-action-archive'),
+          value: _MobileRowAction.archive,
+          enabled: !archivePending,
+          child: Row(
+            children: [
+              Icon(
+                entry.isArchived
+                    ? Icons.unarchive_outlined
+                    : Icons.archive_outlined,
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Text(entry.isArchived ? 'Restore' : 'Archive')),
+            ],
+          ),
+        ),
+        PopupMenuItem<_MobileRowAction>(
+          key: const Key('mobile-row-action-delete'),
+          value: _MobileRowAction.delete,
+          enabled: !deletePending,
+          child: const Row(
+            children: [
+              Icon(Icons.delete_outline),
+              SizedBox(width: 12),
+              Expanded(child: Text('Delete')),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    if (!mounted || action == null) {
+      return;
+    }
+    switch (action) {
+      case _MobileRowAction.favorite:
+        unawaited(_handleFavorite(entry));
+      case _MobileRowAction.archive:
+        unawaited(_handleArchive(entry));
+      case _MobileRowAction.delete:
+        unawaited(_confirmAndDelete(entry));
+    }
   }
 
   /// Opens the detail route for one entry.

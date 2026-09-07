@@ -15,7 +15,9 @@ import 'package:prompt_library/src/library/presentation/library_controller.dart'
 import 'package:prompt_library/src/library/presentation/library_failure_message.dart';
 import 'package:prompt_library/src/library/presentation/library_haptics.dart';
 import 'package:prompt_library/src/library/presentation/library_share.dart';
+import 'package:prompt_library/src/library/presentation/library_state.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_entry_detail_screen.dart';
+import 'package:prompt_library/src/library/presentation/mobile/mobile_library_actions.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_library_screen.dart';
 
 import '../../../support/library_test_support.dart';
@@ -81,6 +83,57 @@ void main() {
   tearDown(() async {
     await controller.dispose();
     await repository.close();
+  });
+
+  test(
+    'coalesces concurrent mutations and tracks pending per action kind',
+    () async {
+      final entry = testEntry('entry-actions-1', title: 'Prompt 1');
+      final actions = MobileLibraryActions(
+        controller: controller,
+        clipboard: const _NoopClipboard(),
+        share: share,
+        haptics: const _NoopHaptics(),
+      );
+
+      final gate = Completer<void>();
+      repository.nextMutationGate = gate;
+
+      final first = actions.setFavorite(entry);
+      expect(
+        actions.isActionPending(entry.id, LibraryMutationKind.setFavorite),
+        isTrue,
+      );
+
+      final second = actions.setFavorite(entry);
+      expect(identical(first, second), isTrue);
+
+      gate.complete();
+      await first;
+
+      expect(
+        actions.isActionPending(entry.id, LibraryMutationKind.setFavorite),
+        isFalse,
+      );
+      expect(repository.calls, contains('setFavorite:entry-actions-1:true'));
+    },
+  );
+
+  test('absorbs LibraryFailure in mobile entry mutations', () async {
+    final entry = testEntry('entry-actions-fail', title: 'Prompt Fail');
+    final actions = MobileLibraryActions(
+      controller: controller,
+      clipboard: const _NoopClipboard(),
+      share: share,
+      haptics: const _NoopHaptics(),
+    );
+
+    repository.nextFailure = const DatabaseFailureLibraryFailure(
+      code: LibraryDatabaseFailureCode.transactionFailed,
+    );
+
+    await expectLater(actions.setFavorite(entry), completes);
+    expect(controller.state.failure, isNotNull);
   });
 
   Future<void> pumpState(WidgetTester tester) async {

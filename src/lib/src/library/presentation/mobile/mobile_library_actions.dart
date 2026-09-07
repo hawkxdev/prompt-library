@@ -5,10 +5,12 @@ import 'dart:async';
 import 'dart:ui' show Rect;
 
 import '../../models/entry.dart';
+import '../../models/library_failure.dart';
 import '../library_clipboard.dart';
 import '../library_controller.dart';
 import '../library_haptics.dart';
 import '../library_share.dart';
+import '../library_state.dart';
 
 /// Reports the observable result of one mobile copy cycle.
 enum MobileCopyOutcome { copied, clipboardFailure }
@@ -37,12 +39,22 @@ final class MobileLibraryActions {
 
   final Map<String, Future<MobileCopyOutcome>> _inFlight = {};
   final Map<String, Future<LibraryShareOutcome>> _sharesInFlight = {};
+  final Map<(String, LibraryMutationKind), Future<void>> _mutationsInFlight =
+      {};
 
   /// Whether a copy cycle for this entry is in flight.
   bool isPending(String entryId) => _inFlight.containsKey(entryId);
 
   /// Whether a share cycle for this entry is in flight.
   bool isSharePending(String entryId) => _sharesInFlight.containsKey(entryId);
+
+  /// Whether a mutation for this entry and action kind is in flight.
+  bool isActionPending(String entryId, LibraryMutationKind kind) {
+    return _mutationsInFlight.containsKey((entryId, kind)) ||
+        controller.state.isMutationActive(
+          LibraryMutationKey(kind, entityId: entryId),
+        );
+  }
 
   /// Runs or joins the copy cycle for one entry.
   ///
@@ -117,5 +129,68 @@ final class MobileLibraryActions {
       _sharesInFlight.remove(entry.id);
     }
     pending.complete(outcome);
+  }
+
+  /// Toggles or sets favorite state for one entry.
+  Future<void> setFavorite(Entry entry, {bool? isFavorite}) {
+    return _runMutation(
+      LibraryMutationKind.setFavorite,
+      entry.id,
+      () => controller.setFavorite(
+        entry.id,
+        isFavorite: isFavorite ?? !entry.isFavorite,
+      ),
+    );
+  }
+
+  /// Toggles or sets archive state for one entry.
+  Future<void> setArchived(Entry entry, {bool? isArchived}) {
+    return _runMutation(
+      LibraryMutationKind.setArchived,
+      entry.id,
+      () => controller.setArchived(
+        entry.id,
+        isArchived: isArchived ?? !entry.isArchived,
+      ),
+    );
+  }
+
+  /// Deletes one entry.
+  Future<void> deleteEntry(Entry entry) {
+    return _runMutation(
+      LibraryMutationKind.deleteEntry,
+      entry.id,
+      () => controller.deleteEntry(entry.id),
+    );
+  }
+
+  /// Executes one guarded mutation cycle coalesced per entry and kind.
+  Future<void> _runMutation(
+    LibraryMutationKind kind,
+    String entryId,
+    Future<void> Function() operation,
+  ) {
+    final key = (entryId, kind);
+    final inFlight = _mutationsInFlight[key];
+    if (inFlight != null) {
+      return inFlight;
+    }
+    final future = _executeMutation(key, operation);
+    _mutationsInFlight[key] = future;
+    return future;
+  }
+
+  /// Runs the mutation and catches expected [LibraryFailure] instances.
+  Future<void> _executeMutation(
+    (String, LibraryMutationKind) key,
+    Future<void> Function() operation,
+  ) async {
+    try {
+      await operation();
+    } on LibraryFailure {
+      // The controller retains a non-sensitive failure for the banner.
+    } finally {
+      _mutationsInFlight.remove(key);
+    }
   }
 }

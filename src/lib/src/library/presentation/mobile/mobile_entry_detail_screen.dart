@@ -6,7 +6,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../models/entry.dart';
-import '../../models/library_failure.dart';
 import '../delete_entry_dialog.dart';
 import '../library_controller.dart';
 import '../library_failure_message.dart';
@@ -243,7 +242,7 @@ final class _MobileEntryDetailScreenState
 
   /// Whether one entry mutation is active.
   bool _isMutationActive(LibraryMutationKind kind, String entryId) {
-    return _state.isMutationActive(LibraryMutationKey(kind, entityId: entryId));
+    return widget.actions.isActionPending(entryId, kind);
   }
 
   /// Opens the entry editor route.
@@ -260,22 +259,12 @@ final class _MobileEntryDetailScreenState
 
   /// Toggles the favorite state.
   Future<void> _setFavorite(Entry entry) {
-    return _runMutation(
-      () => widget.controller.setFavorite(
-        entry.id,
-        isFavorite: !entry.isFavorite,
-      ),
-    );
+    return widget.actions.setFavorite(entry);
   }
 
   /// Toggles the archive state.
   Future<void> _setArchived(Entry entry) {
-    return _runMutation(
-      () => widget.controller.setArchived(
-        entry.id,
-        isArchived: !entry.isArchived,
-      ),
-    );
+    return widget.actions.setArchived(entry);
   }
 
   /// Confirms and deletes one entry.
@@ -284,16 +273,7 @@ final class _MobileEntryDetailScreenState
     if (!confirmed || !mounted) {
       return;
     }
-    await _runMutation(() => widget.controller.deleteEntry(entry.id));
-  }
-
-  /// Runs a mutation through the retained failure banner.
-  Future<void> _runMutation(Future<void> Function() operation) async {
-    try {
-      await operation();
-    } on LibraryFailure {
-      // The controller retains a non-sensitive failure for the banner.
-    }
+    await widget.actions.deleteEntry(entry);
   }
 
   /// Runs one coalesced share cycle from the detail route.
