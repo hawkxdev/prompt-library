@@ -10,6 +10,7 @@ import 'package:uuid/uuid.dart';
 import '../models/category.dart';
 import '../models/entry.dart';
 import '../models/entry_input.dart';
+import '../models/entry_update.dart';
 import '../models/library_failure.dart';
 import '../models/library_snapshot.dart';
 import '../models/normalization.dart';
@@ -97,61 +98,60 @@ final class DriftLibraryRepository implements LibraryRepository {
   /// Reads library snapshot.
   @override
   Future<LibrarySnapshot> getSnapshot() {
-    return _wrapDbRead(
-      () => _db.transaction(() async {
-        final entriesData = await _db.select(_db.entries).get();
-        final categoriesData = await _db.select(_db.categories).get();
-        final tagsData = await _db.select(_db.tags).get();
-        final entryTagsData = await _db.select(_db.entryTags).get();
+    return _wrapDbRead(() => _db.transaction(_readSnapshot));
+  }
 
-        final tagIdsByEntryId = <String, List<String>>{};
-        for (final entryTag in entryTagsData) {
-          (tagIdsByEntryId[entryTag.entryId] ??= <String>[]).add(
-            entryTag.tagId,
-          );
-        }
+  /// Reads the full snapshot inside the caller's transaction.
+  Future<LibrarySnapshot> _readSnapshot() async {
+    final entriesData = await _db.select(_db.entries).get();
+    final categoriesData = await _db.select(_db.categories).get();
+    final tagsData = await _db.select(_db.tags).get();
+    final entryTagsData = await _db.select(_db.entryTags).get();
 
-        final entries = entriesData.map((row) {
-          return Entry(
-            id: row.id,
-            title: row.title,
-            body: row.body,
-            keyword: row.keyword,
-            categoryId: row.categoryId,
-            tagIds: tagIdsByEntryId[row.id] ?? const [],
-            isFavorite: row.isFavorite,
-            isArchived: row.isArchived,
-            createdAt: row.createdAt,
-            updatedAt: row.updatedAt,
-            lastCopiedAt: row.lastCopiedAt,
-          );
-        });
+    final tagIdsByEntryId = <String, List<String>>{};
+    for (final entryTag in entryTagsData) {
+      (tagIdsByEntryId[entryTag.entryId] ??= <String>[]).add(entryTag.tagId);
+    }
 
-        final categories = categoriesData.map((row) {
-          return Category(
-            id: row.id,
-            name: row.name,
-            normalizedName: row.normalizedName,
-            sortOrder: row.sortOrder,
-            createdAt: row.createdAt,
-          );
-        });
+    final entries = entriesData.map((row) {
+      return Entry(
+        id: row.id,
+        title: row.title,
+        body: row.body,
+        keyword: row.keyword,
+        categoryId: row.categoryId,
+        tagIds: tagIdsByEntryId[row.id] ?? const [],
+        isFavorite: row.isFavorite,
+        isArchived: row.isArchived,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        lastCopiedAt: row.lastCopiedAt,
+      );
+    });
 
-        final tags = tagsData.map((row) {
-          return Tag(
-            id: row.id,
-            name: row.name,
-            normalizedName: row.normalizedName,
-            createdAt: row.createdAt,
-          );
-        });
+    final categories = categoriesData.map((row) {
+      return Category(
+        id: row.id,
+        name: row.name,
+        normalizedName: row.normalizedName,
+        sortOrder: row.sortOrder,
+        createdAt: row.createdAt,
+      );
+    });
 
-        return LibrarySnapshot(
-          entries: entries,
-          categories: categories,
-          tags: tags,
-        );
-      }),
+    final tags = tagsData.map((row) {
+      return Tag(
+        id: row.id,
+        name: row.name,
+        normalizedName: row.normalizedName,
+        createdAt: row.createdAt,
+      );
+    });
+
+    return LibrarySnapshot(
+      entries: entries,
+      categories: categories,
+      tags: tags,
     );
   }
 
@@ -382,6 +382,330 @@ final class DriftLibraryRepository implements LibraryRepository {
         );
       }),
     );
+  }
+
+  /// Restores a full library snapshot atomically.
+  @override
+  Future<LibrarySnapshot> restoreSnapshot({
+    required LibrarySnapshot expectedCurrent,
+    required LibrarySnapshot replacement,
+  }) {
+    return _wrapDb(
+      () => _db.transaction(() async {
+        final current = await _readSnapshot();
+        if (current != expectedCurrent) {
+          throw const LibraryFailure.staleSnapshot();
+        }
+        _validateSnapshotReferences(replacement);
+
+        await _db.delete(_db.entryTags).go();
+        await _db.delete(_db.entries).go();
+        await _db.delete(_db.categories).go();
+        await _db.delete(_db.tags).go();
+
+        if (replacement.categories.isNotEmpty) {
+          await _db.batch((batch) {
+            for (final category in replacement.categories) {
+              batch.insert(
+                _db.categories,
+                CategoriesCompanion.insert(
+                  id: category.id,
+                  name: category.name,
+                  normalizedName: category.normalizedName,
+                  sortOrder: category.sortOrder,
+                  createdAt: category.createdAt,
+                ),
+              );
+            }
+          });
+        }
+
+        if (replacement.tags.isNotEmpty) {
+          await _db.batch((batch) {
+            for (final tag in replacement.tags) {
+              batch.insert(
+                _db.tags,
+                TagsCompanion.insert(
+                  id: tag.id,
+                  name: tag.name,
+                  normalizedName: tag.normalizedName,
+                  createdAt: tag.createdAt,
+                ),
+              );
+            }
+          });
+        }
+
+        if (replacement.entries.isNotEmpty) {
+          await _db.batch((batch) {
+            for (final entry in replacement.entries) {
+              batch.insert(
+                _db.entries,
+                EntriesCompanion.insert(
+                  id: entry.id,
+                  title: entry.title,
+                  body: entry.body,
+                  keyword: Value(entry.keyword),
+                  categoryId: Value(entry.categoryId),
+                  isFavorite: Value(entry.isFavorite),
+                  isArchived: Value(entry.isArchived),
+                  createdAt: entry.createdAt,
+                  updatedAt: entry.updatedAt,
+                  lastCopiedAt: Value(entry.lastCopiedAt),
+                ),
+              );
+            }
+          });
+        }
+
+        final joinRows = <EntryTagsCompanion>[
+          for (final entry in replacement.entries)
+            for (final tagId in entry.tagIds)
+              EntryTagsCompanion.insert(entryId: entry.id, tagId: tagId),
+        ];
+        if (joinRows.isNotEmpty) {
+          await _db.batch((batch) {
+            for (final row in joinRows) {
+              batch.insert(_db.entryTags, row);
+            }
+          });
+        }
+
+        return _readSnapshot();
+      }),
+    );
+  }
+
+  /// Adds imported Raycast entries atomically.
+  @override
+  Future<List<Entry>> addRaycastEntries({
+    required LibrarySnapshot expectedCurrent,
+    required List<RaycastEntryDraft> drafts,
+  }) {
+    return _wrapDb(
+      () => _db.transaction(() async {
+        final current = await _readSnapshot();
+        if (current != expectedCurrent) {
+          throw const LibraryFailure.staleSnapshot();
+        }
+
+        final trimmedTitles = <String>[];
+        for (final draft in drafts) {
+          final trimmedTitle = draft.title.trim();
+          if (trimmedTitle.isEmpty) {
+            throw const LibraryFailure.invalidInput(
+              LibraryInputFailureReason.emptyTitle,
+            );
+          }
+          if (draft.body.trim().isEmpty) {
+            throw const LibraryFailure.invalidInput(
+              LibraryInputFailureReason.emptyBody,
+            );
+          }
+          trimmedTitles.add(trimmedTitle);
+        }
+
+        final now = _clock().toUtc();
+        final created = <Entry>[];
+        await _db.batch((batch) {
+          for (var i = 0; i < drafts.length; i++) {
+            final draft = drafts[i];
+            final id = _uuidGenerator();
+            batch.insert(
+              _db.entries,
+              EntriesCompanion.insert(
+                id: id,
+                title: trimmedTitles[i],
+                body: draft.body,
+                keyword: Value(draft.keyword),
+                isFavorite: const Value(false),
+                isArchived: const Value(false),
+                createdAt: now,
+                updatedAt: now,
+              ),
+            );
+            created.add(
+              Entry(
+                id: id,
+                title: trimmedTitles[i],
+                body: draft.body,
+                keyword: draft.keyword,
+                isFavorite: false,
+                isArchived: false,
+                createdAt: now,
+                updatedAt: now,
+                lastCopiedAt: null,
+              ),
+            );
+          }
+        });
+        return List.unmodifiable(created);
+      }),
+    );
+  }
+
+  /// Updates library entry with explicit keyword intent.
+  @override
+  Future<Entry> updateEntryDetails(String id, EntryUpdate update) {
+    final trimmedTitle = update.title.trim();
+    if (trimmedTitle.isEmpty) {
+      throw const LibraryFailure.invalidInput(
+        LibraryInputFailureReason.emptyTitle,
+      );
+    }
+    if (update.body.trim().isEmpty) {
+      throw const LibraryFailure.invalidInput(
+        LibraryInputFailureReason.emptyBody,
+      );
+    }
+    final sortedTagIds = List<String>.unmodifiable(
+      update.tagIds.toSet().toList()..sort(),
+    );
+
+    return _wrapDb(
+      () => _db.transaction(() async {
+        final existing = await (_db.select(
+          _db.entries,
+        )..where((t) => t.id.equals(id))).getSingleOrNull();
+        if (existing == null) {
+          throw LibraryFailure.entryNotFound(id: id);
+        }
+
+        if (update.categoryId != null) {
+          final cat = await (_db.select(
+            _db.categories,
+          )..where((t) => t.id.equals(update.categoryId!))).getSingleOrNull();
+          if (cat == null) {
+            throw const LibraryFailure.invalidInput(
+              LibraryInputFailureReason.unknownCategory,
+            );
+          }
+        }
+
+        if (sortedTagIds.isNotEmpty) {
+          final existingTags = await (_db.select(
+            _db.tags,
+          )..where((t) => t.id.isIn(sortedTagIds))).get();
+          if (existingTags.length != sortedTagIds.length) {
+            throw const LibraryFailure.invalidInput(
+              LibraryInputFailureReason.unknownTag,
+            );
+          }
+        }
+
+        final existingJoins = await (_db.select(
+          _db.entryTags,
+        )..where((t) => t.entryId.equals(id))).get();
+        final existingTagIds = List<String>.unmodifiable(
+          existingJoins.map((j) => j.tagId).toSet().toList()..sort(),
+        );
+
+        var nextKeyword = existing.keyword;
+        final intent = update.keyword;
+        if (intent is ReplaceKeyword) {
+          final trimmed = intent.value?.trim();
+          nextKeyword = (trimmed != null && trimmed.isNotEmpty)
+              ? trimmed
+              : null;
+        }
+
+        final isSameTitle = existing.title == trimmedTitle;
+        final isSameBody = existing.body == update.body;
+        final isSameKeyword = existing.keyword == nextKeyword;
+        final isSameCategory = existing.categoryId == update.categoryId;
+        final isSameFavorite = existing.isFavorite == update.isFavorite;
+        final isSameArchived = existing.isArchived == update.isArchived;
+        final isSameTags = _areListsEqual(existingTagIds, sortedTagIds);
+        if (isSameTitle &&
+            isSameBody &&
+            isSameKeyword &&
+            isSameCategory &&
+            isSameFavorite &&
+            isSameArchived &&
+            isSameTags) {
+          return Entry(
+            id: id,
+            title: existing.title,
+            body: existing.body,
+            keyword: existing.keyword,
+            categoryId: existing.categoryId,
+            tagIds: existingTagIds,
+            isFavorite: existing.isFavorite,
+            isArchived: existing.isArchived,
+            createdAt: existing.createdAt.toUtc(),
+            updatedAt: existing.updatedAt.toUtc(),
+            lastCopiedAt: existing.lastCopiedAt?.toUtc(),
+          );
+        }
+
+        final now = _clock().toUtc();
+
+        await (_db.update(_db.entries)..where((t) => t.id.equals(id))).write(
+          EntriesCompanion(
+            title: Value(trimmedTitle),
+            body: Value(update.body),
+            keyword: Value(nextKeyword),
+            categoryId: Value(update.categoryId),
+            isFavorite: Value(update.isFavorite),
+            isArchived: Value(update.isArchived),
+            updatedAt: Value(now),
+          ),
+        );
+
+        if (!isSameTags) {
+          await (_db.delete(
+            _db.entryTags,
+          )..where((t) => t.entryId.equals(id))).go();
+          if (sortedTagIds.isNotEmpty) {
+            await _db.batch((batch) {
+              for (final tagId in sortedTagIds) {
+                batch.insert(
+                  _db.entryTags,
+                  EntryTagsCompanion.insert(entryId: id, tagId: tagId),
+                );
+              }
+            });
+          }
+        }
+
+        return Entry(
+          id: id,
+          title: trimmedTitle,
+          body: update.body,
+          keyword: nextKeyword,
+          categoryId: update.categoryId,
+          tagIds: sortedTagIds,
+          isFavorite: update.isFavorite,
+          isArchived: update.isArchived,
+          createdAt: existing.createdAt.toUtc(),
+          updatedAt: now,
+          lastCopiedAt: existing.lastCopiedAt?.toUtc(),
+        );
+      }),
+    );
+  }
+
+  /// Validates replacement references before destructive replacement.
+  static void _validateSnapshotReferences(LibrarySnapshot snapshot) {
+    final categoryIds = {
+      for (final category in snapshot.categories) category.id,
+    };
+    final tagIds = {for (final tag in snapshot.tags) tag.id};
+    for (final entry in snapshot.entries) {
+      final categoryId = entry.categoryId;
+      if (categoryId != null && !categoryIds.contains(categoryId)) {
+        throw const LibraryFailure.invalidInput(
+          LibraryInputFailureReason.unknownCategory,
+        );
+      }
+      for (final tagId in entry.tagIds) {
+        if (!tagIds.contains(tagId)) {
+          throw const LibraryFailure.invalidInput(
+            LibraryInputFailureReason.unknownTag,
+          );
+        }
+      }
+    }
   }
 
   /// Deletes library entry.

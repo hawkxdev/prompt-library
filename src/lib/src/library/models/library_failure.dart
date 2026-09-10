@@ -82,6 +82,9 @@ sealed class LibraryFailure implements Exception {
   const factory LibraryFailure.databaseFailure({
     required LibraryDatabaseFailureCode code,
   }) = DatabaseFailureLibraryFailure;
+
+  /// Stale snapshot error.
+  const factory LibraryFailure.staleSnapshot() = StaleSnapshotLibraryFailure;
 }
 
 /// Duplicate category name failure.
@@ -267,4 +270,23 @@ final class DatabaseFailureLibraryFailure extends LibraryFailure {
   /// Returns string representation.
   @override
   String toString() => 'LibraryFailure.databaseFailure(code: ${code.name})';
+}
+
+/// Stale snapshot failure.
+final class StaleSnapshotLibraryFailure extends LibraryFailure {
+  /// Creates stale snapshot failure.
+  const StaleSnapshotLibraryFailure();
+
+  /// Checks value equality.
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is StaleSnapshotLibraryFailure;
+
+  /// Computes hash code.
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  /// Returns string representation.
+  @override
+  String toString() => 'LibraryFailure.staleSnapshot()';
 }

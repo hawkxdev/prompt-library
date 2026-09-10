@@ -7,6 +7,7 @@ import 'package:prompt_library/src/library/data/library_repository.dart';
 import 'package:prompt_library/src/library/models/category.dart';
 import 'package:prompt_library/src/library/models/entry.dart';
 import 'package:prompt_library/src/library/models/entry_input.dart';
+import 'package:prompt_library/src/library/models/entry_update.dart';
 import 'package:prompt_library/src/library/models/library_failure.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/models/tag.dart';
@@ -109,6 +110,85 @@ final class TestLibraryRepository implements LibraryRepository {
       tagIds: input.tagIds,
       isFavorite: input.isFavorite,
       isArchived: input.isArchived,
+      updatedAt: current.updatedAt.add(const Duration(minutes: 1)),
+    );
+    _publish(
+      entries: _snapshot.entries.map(
+        (entry) => entry.id == id ? updated : entry,
+      ),
+    );
+    return updated;
+  }
+
+  @override
+  Future<LibrarySnapshot> restoreSnapshot({
+    required LibrarySnapshot expectedCurrent,
+    required LibrarySnapshot replacement,
+  }) async {
+    calls.add('restoreSnapshot');
+    await _waitIfNeeded();
+    await _failIfNeeded();
+    if (_snapshot != expectedCurrent) {
+      throw const LibraryFailure.staleSnapshot();
+    }
+    _publish(
+      entries: replacement.entries,
+      categories: replacement.categories,
+      tags: replacement.tags,
+    );
+    return _snapshot;
+  }
+
+  @override
+  Future<List<Entry>> addRaycastEntries({
+    required LibrarySnapshot expectedCurrent,
+    required List<RaycastEntryDraft> drafts,
+  }) async {
+    calls.add('addRaycastEntries');
+    await _waitIfNeeded();
+    await _failIfNeeded();
+    if (_snapshot != expectedCurrent) {
+      throw const LibraryFailure.staleSnapshot();
+    }
+    final now = DateTime.utc(2026, 1, 1, 12, _nextId);
+    final created = <Entry>[];
+    final entries = [..._snapshot.entries];
+    for (final draft in drafts) {
+      final entry = Entry(
+        id: 'entry-${_nextId++}',
+        title: draft.title,
+        body: draft.body,
+        keyword: draft.keyword,
+        createdAt: now,
+        updatedAt: now,
+      );
+      entries.add(entry);
+      created.add(entry);
+    }
+    _publish(entries: entries);
+    return List.unmodifiable(created);
+  }
+
+  @override
+  Future<Entry> updateEntryDetails(String id, EntryUpdate update) async {
+    calls.add('updateEntryDetails:$id');
+    await _waitIfNeeded();
+    await _failIfNeeded();
+    final current = _snapshot.entries.singleWhere((entry) => entry.id == id);
+    var nextKeyword = current.keyword;
+    final intent = update.keyword;
+    if (intent is ReplaceKeyword) {
+      final trimmed = intent.value?.trim();
+      nextKeyword = (trimmed != null && trimmed.isNotEmpty) ? trimmed : null;
+    }
+    final updated = current.copyWith(
+      title: update.title,
+      body: update.body,
+      keyword: nextKeyword,
+      categoryId: update.categoryId,
+      tagIds: update.tagIds,
+      isFavorite: update.isFavorite,
+      isArchived: update.isArchived,
       updatedAt: current.updatedAt.add(const Duration(minutes: 1)),
     );
     _publish(

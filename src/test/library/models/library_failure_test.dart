@@ -402,6 +402,18 @@ void main() {
       );
     });
 
+    group('staleSnapshot', () {
+      test('toString provides clean representation without sensitive data', () {
+        const failure = LibraryFailure.staleSnapshot();
+        final str = failure.toString();
+
+        expect(str, 'LibraryFailure.staleSnapshot()');
+        expect(str, isNot(contains(sensitivePromptBody)));
+        expect(failure, const LibraryFailure.staleSnapshot());
+        expect(failure, isNot(const LibraryFailure.duplicateCategoryName()));
+      });
+    });
+
     group('exhaustive pattern matching', () {
       test('sealed hierarchy allows exhaustive switch statement', () {
         final failures = <LibraryFailure>[
@@ -420,6 +432,7 @@ void main() {
           const LibraryFailure.databaseFailure(
             code: LibraryDatabaseFailureCode.corrupt,
           ),
+          const LibraryFailure.staleSnapshot(),
         ];
 
         final labels = failures
@@ -439,6 +452,7 @@ void main() {
                 ) =>
                   'reorder_${expectedCount}_$actualCount',
                 DatabaseFailureLibraryFailure(:final code) => 'db_${code.name}',
+                StaleSnapshotLibraryFailure() => 'stale_snapshot',
               },
             )
             .toList();
@@ -454,6 +468,7 @@ void main() {
             'invalid_input_emptyTitle',
             'reorder_2_1',
             'db_corrupt',
+            'stale_snapshot',
           ]),
         );
       });

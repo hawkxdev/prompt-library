@@ -15,6 +15,8 @@ String messageForLibraryFailure(LibraryFailure failure) {
     InvalidInputLibraryFailure() => 'Check the entered values and try again.',
     InvalidCategoryReorderLibraryFailure() =>
       'The category order could not be saved.',
+    StaleSnapshotLibraryFailure() =>
+      'The library has changed. Review the current library and try again.',
     DatabaseFailureLibraryFailure() =>
       'The library could not save this change.',
   };

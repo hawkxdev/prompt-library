@@ -14,6 +14,12 @@ import 'package:prompt_library/src/library/data/library_database.dart'
 import 'package:prompt_library/src/library/models/entry_input.dart';
 import 'package:prompt_library/src/library/models/library_failure.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
+import 'package:prompt_library/src/library/models/category.dart';
+import 'package:prompt_library/src/library/models/entry.dart';
+import 'package:prompt_library/src/library/models/tag.dart';
+import 'package:prompt_library/src/library/models/entry_update.dart';
+import 'package:prompt_library/src/library/transfer/library_document.dart';
+import 'package:prompt_library/src/library/transfer/library_json_codec.dart';
 import 'package:prompt_library/src/library/data/library_repository.dart';
 
 void main() {
@@ -2736,6 +2742,913 @@ void main() {
           await tempDir.delete(recursive: true);
         }
       }
+    });
+  });
+
+  // === Portability Stage 2: Atomic Restore & Add ===
+  group('DriftLibraryRepository (Portability Stage 2: Atomic Restore & Add)', () {
+    late LibraryDatabase db;
+    late DriftLibraryRepository repository;
+    final uuidValues = <String>[];
+    var uuidIndex = 0;
+    var currentTime = DateTime.utc(2026, 9, 1, 8, 0, 0);
+
+    setUp(() {
+      uuidValues.clear();
+      uuidIndex = 0;
+      currentTime = DateTime.utc(2026, 9, 1, 8, 0, 0);
+      db = LibraryDatabase.forTesting(NativeDatabase.memory());
+      repository = DriftLibraryRepository(
+        db,
+        uuidGenerator: () {
+          final id = uuidIndex < uuidValues.length
+              ? uuidValues[uuidIndex]
+              : 'auto-$uuidIndex';
+          uuidIndex += 1;
+          return id;
+        },
+        clock: () => currentTime,
+      );
+    });
+
+    tearDown(() async {
+      await db.close();
+    });
+
+    test('restoreSnapshot replaces an empty library preserving ids, dates, verbatim keywords, archive, and unused taxonomy', () async {
+      final t0 = DateTime.utc(2026, 9, 1, 10, 0, 0);
+      final t1 = DateTime.utc(2026, 9, 2, 11, 30, 5);
+      final replacement = LibrarySnapshot(
+        entries: [
+          Entry(
+            id: 'entry-r1',
+            title: 'Restored',
+            body: 'Body with CRLF\r\nsecond line',
+            keyword: '  padded alias  ',
+            categoryId: 'cat-r1',
+            tagIds: ['tag-r2', 'tag-r1'],
+            isFavorite: true,
+            createdAt: t0,
+            updatedAt: t1,
+            lastCopiedAt: t1,
+          ),
+          Entry(
+            id: 'entry-r2',
+            title: 'Archived',
+            body: 'Archived body',
+            keyword: '',
+            isArchived: true,
+            createdAt: t0,
+            updatedAt: t0,
+          ),
+        ],
+        categories: [
+          Category(
+            id: 'cat-r1',
+            name: 'Used',
+            normalizedName: 'used',
+            sortOrder: 3,
+            createdAt: t0,
+          ),
+          Category(
+            id: 'cat-r2',
+            name: 'Unused',
+            normalizedName: 'unused',
+            sortOrder: 9,
+            createdAt: t0,
+          ),
+        ],
+        tags: [
+          Tag(id: 'tag-r1', name: 'One', normalizedName: 'one', createdAt: t0),
+          Tag(id: 'tag-r2', name: 'Two', normalizedName: 'two', createdAt: t0),
+          Tag(
+            id: 'tag-r3',
+            name: 'Unused tag',
+            normalizedName: 'unused tag',
+            createdAt: t0,
+          ),
+        ],
+      );
+
+      final restored = await repository.restoreSnapshot(
+        expectedCurrent: const LibrarySnapshot.empty(),
+        replacement: replacement,
+      );
+
+      expect(restored, replacement);
+      expect(await repository.getSnapshot(), replacement);
+      final rich = restored.entries.singleWhere(
+        (entry) => entry.id == 'entry-r1',
+      );
+      expect(rich.keyword, '  padded alias  ');
+      expect(rich.tagIds, ['tag-r1', 'tag-r2']);
+      expect(rich.lastCopiedAt, t1);
+      final archived = restored.entries.singleWhere(
+        (entry) => entry.id == 'entry-r2',
+      );
+      expect(archived.keyword, '');
+      expect(archived.isArchived, isTrue);
+      expect(restored.tags.map((tag) => tag.id), [
+        'tag-r1',
+        'tag-r2',
+        'tag-r3',
+      ]);
+      expect(restored.categories.map((category) => category.id), [
+        'cat-r1',
+        'cat-r2',
+      ]);
+    });
+
+    test('restoreSnapshot rejects a stale expectation after markCopied and leaves the library unchanged', () async {
+      uuidValues.add('seed-entry');
+      final seed = await repository.createEntry(
+        EntryInput(title: 'Seed', body: 'Seed body'),
+      );
+      final before = await repository.getSnapshot();
+
+      currentTime = DateTime.utc(2026, 9, 1, 9, 30, 0);
+      await repository.markCopied(seed.id);
+
+      await expectLater(
+        repository.restoreSnapshot(
+          expectedCurrent: before,
+          replacement: const LibrarySnapshot.empty(),
+        ),
+        throwsA(const LibraryFailure.staleSnapshot()),
+      );
+
+      final after = await repository.getSnapshot();
+      expect(after.entries.single.id, seed.id);
+      expect(after.entries.single.lastCopiedAt, currentTime);
+    });
+
+    test('restoreSnapshot rolls back completely when replacement violates normalized-name uniqueness', () async {
+      uuidValues.addAll(['seed-cat', 'seed-entry']);
+      final category = await repository.createCategory('Original');
+      final entry = await repository.createEntry(
+        EntryInput(title: 'Seed', body: 'Seed body', categoryId: category.id),
+      );
+      final current = await repository.getSnapshot();
+
+      final t0 = DateTime.utc(2026, 9, 3, 8, 0, 0);
+      final violating = LibrarySnapshot(
+        entries: [
+          Entry(
+            id: 'new-1',
+            title: 'New',
+            body: 'New body',
+            createdAt: t0,
+            updatedAt: t0,
+          ),
+        ],
+        categories: [
+          Category(
+            id: 'cat-a',
+            name: 'Alpha',
+            normalizedName: 'alpha',
+            sortOrder: 0,
+            createdAt: t0,
+          ),
+          Category(
+            id: 'cat-b',
+            name: 'ALPHA ',
+            normalizedName: 'alpha',
+            sortOrder: 1,
+            createdAt: t0,
+          ),
+        ],
+      );
+
+      await expectLater(
+        repository.restoreSnapshot(
+          expectedCurrent: current,
+          replacement: violating,
+        ),
+        throwsA(const LibraryFailure.duplicateCategoryName()),
+      );
+
+      final after = await repository.getSnapshot();
+      expect(after, current);
+      expect(after.entries.single.id, entry.id);
+      expect(after.categories.single.id, category.id);
+    });
+
+    test('restoreSnapshot rejects dangling references with typed failures before destroying data', () async {
+      uuidValues.add('seed-entry');
+      await repository.createEntry(
+        EntryInput(title: 'Seed', body: 'Seed body'),
+      );
+      final current = await repository.getSnapshot();
+      final t0 = DateTime.utc(2026, 9, 3, 8, 0, 0);
+
+      final danglingCategory = LibrarySnapshot(
+        entries: [
+          Entry(
+            id: 'x',
+            title: 'X',
+            body: 'X body',
+            categoryId: 'ghost-cat',
+            createdAt: t0,
+            updatedAt: t0,
+          ),
+        ],
+      );
+      await expectLater(
+        repository.restoreSnapshot(
+          expectedCurrent: current,
+          replacement: danglingCategory,
+        ),
+        throwsA(
+          const LibraryFailure.invalidInput(
+            LibraryInputFailureReason.unknownCategory,
+          ),
+        ),
+      );
+      expect(await repository.getSnapshot(), current);
+
+      final danglingTag = LibrarySnapshot(
+        entries: [
+          Entry(
+            id: 'y',
+            title: 'Y',
+            body: 'Y body',
+            tagIds: ['ghost-tag'],
+            createdAt: t0,
+            updatedAt: t0,
+          ),
+        ],
+      );
+      await expectLater(
+        repository.restoreSnapshot(
+          expectedCurrent: current,
+          replacement: danglingTag,
+        ),
+        throwsA(
+          const LibraryFailure.invalidInput(
+            LibraryInputFailureReason.unknownTag,
+          ),
+        ),
+      );
+      expect((await repository.getSnapshot()).entries.single.title, 'Seed');
+    });
+
+    test('addRaycastEntries appends drafts with fresh ids, one timestamp, and verbatim keywords', () async {
+      uuidValues.addAll(['seed-cat', 'seed-1', 'ray-1', 'ray-2', 'ray-3']);
+      final seedCategory = await repository.createCategory('Keep');
+      final seed = await repository.createEntry(
+        EntryInput(
+          title: 'Seed',
+          body: 'Seed body',
+          categoryId: seedCategory.id,
+        ),
+      );
+      final before = await repository.getSnapshot();
+      currentTime = DateTime.utc(2026, 9, 4, 12, 0, 0);
+
+      final created = await repository.addRaycastEntries(
+        expectedCurrent: before,
+        drafts: const [
+          RaycastEntryDraft(
+            title: '  Trimmed  ',
+            body: 'Verbatim body\r\nline2',
+            keyword: '  spaced  ',
+          ),
+          RaycastEntryDraft(
+            title: 'Blank keyword',
+            body: 'Body two',
+            keyword: '',
+          ),
+          RaycastEntryDraft(title: 'Null keyword', body: 'Body three'),
+        ],
+      );
+
+      expect(created.map((entry) => entry.id), ['ray-1', 'ray-2', 'ray-3']);
+      final after = await repository.getSnapshot();
+      expect(after.entries.length, 4);
+      final first = after.entries.singleWhere((entry) => entry.id == 'ray-1');
+      expect(first.title, 'Trimmed');
+      expect(first.body, 'Verbatim body\r\nline2');
+      expect(first.keyword, '  spaced  ');
+      expect(first.categoryId, isNull);
+      expect(first.tagIds, isEmpty);
+      expect(first.isFavorite, isFalse);
+      expect(first.isArchived, isFalse);
+      expect(first.createdAt, currentTime);
+      expect(first.updatedAt, currentTime);
+      expect(first.lastCopiedAt, isNull);
+      expect(
+        after.entries.singleWhere((entry) => entry.id == 'ray-2').keyword,
+        '',
+      );
+      expect(
+        after.entries.singleWhere((entry) => entry.id == 'ray-3').keyword,
+        isNull,
+      );
+      expect(
+        after.entries.singleWhere((entry) => entry.id == seed.id).categoryId,
+        seedCategory.id,
+      );
+    });
+
+    test('addRaycastEntries rejects stale expectation and invalid drafts without writing anything', () async {
+      uuidValues.add('seed-1');
+      final seed = await repository.createEntry(
+        EntryInput(title: 'Seed', body: 'Seed body'),
+      );
+      final before = await repository.getSnapshot();
+      await repository.markCopied(seed.id);
+
+      await expectLater(
+        repository.addRaycastEntries(
+          expectedCurrent: before,
+          drafts: const [RaycastEntryDraft(title: 'T', body: 'B')],
+        ),
+        throwsA(const LibraryFailure.staleSnapshot()),
+      );
+      expect((await repository.getSnapshot()).entries.length, 1);
+
+      final current = await repository.getSnapshot();
+      await expectLater(
+        repository.addRaycastEntries(
+          expectedCurrent: current,
+          drafts: const [
+            RaycastEntryDraft(title: 'Good', body: 'Good body'),
+            RaycastEntryDraft(title: '   ', body: 'Bad body'),
+          ],
+        ),
+        throwsA(
+          const LibraryFailure.invalidInput(
+            LibraryInputFailureReason.emptyTitle,
+          ),
+        ),
+      );
+      final after = await repository.getSnapshot();
+      expect(after.entries.length, 1);
+      expect(after.entries.single.id, seed.id);
+    });
+
+    test('addRaycastEntries with empty drafts still checks freshness and writes nothing', () async {
+      uuidValues.add('seed-1');
+      await repository.createEntry(
+        EntryInput(title: 'Seed', body: 'Seed body'),
+      );
+      final current = await repository.getSnapshot();
+
+      final created = await repository.addRaycastEntries(
+        expectedCurrent: current,
+        drafts: const [],
+      );
+
+      expect(created, isEmpty);
+      expect(await repository.getSnapshot(), current);
+      await expectLater(
+        repository.addRaycastEntries(
+          expectedCurrent: const LibrarySnapshot.empty(),
+          drafts: const [],
+        ),
+        throwsA(const LibraryFailure.staleSnapshot()),
+      );
+    });
+
+    test('late markCopied serializes after restore: surviving id receives the copy, removed id fails', () async {
+      uuidValues.addAll([
+        'seed-cat',
+        'seed-tag',
+        'seed-survivor',
+        'seed-victim',
+      ]);
+      final category = await repository.createCategory('Race');
+      final tag = await repository.createTag('raced');
+      final survivor = await repository.createEntry(
+        EntryInput(
+          title: 'Survivor',
+          body: 'S body',
+          categoryId: category.id,
+          tagIds: [tag.id],
+        ),
+      );
+      final victim = await repository.createEntry(
+        EntryInput(title: 'Victim', body: 'V body'),
+      );
+      final before = await repository.getSnapshot();
+      final replacement = LibrarySnapshot(
+        entries: before.entries.where((entry) => entry.id == survivor.id),
+        categories: before.categories,
+        tags: before.tags,
+      );
+
+      final restoreFuture = repository.restoreSnapshot(
+        expectedCurrent: before,
+        replacement: replacement,
+      );
+      final survivorCopy = repository.markCopied(survivor.id);
+      final victimCopy = repository.markCopied(victim.id);
+
+      await expectLater(
+        victimCopy,
+        throwsA(LibraryFailure.entryNotFound(id: victim.id)),
+      );
+      await survivorCopy;
+      await restoreFuture;
+
+      final after = await repository.getSnapshot();
+      expect(after.entries.map((entry) => entry.id), [survivor.id]);
+      expect(after.entries.single.lastCopiedAt, isNotNull);
+      expect(after.entries.single.categoryId, category.id);
+      expect(after.entries.single.tagIds, [tag.id]);
+      expect(after.tags.map((value) => value.id), [tag.id]);
+    });
+
+    test(
+      'watchSnapshot emits only coherent snapshots around restore',
+      () async {
+        uuidValues.addAll(['watch-cat', 'watch-seed']);
+        final category = await repository.createCategory('Watch');
+        await repository.createEntry(
+          EntryInput(title: 'Seed', body: 'Seed body', categoryId: category.id),
+        );
+        final before = await repository.getSnapshot();
+
+        final emissions = <LibrarySnapshot>[];
+        final subscription = repository.watchSnapshot().listen(emissions.add);
+        await pumpEventQueue();
+        emissions.clear();
+
+        currentTime = DateTime.utc(2026, 9, 3, 10, 0, 0);
+        final replacement = LibrarySnapshot(
+          entries: [
+            Entry(
+              id: 'fresh-1',
+              title: 'Fresh',
+              body: 'Fresh body',
+              createdAt: currentTime,
+              updatedAt: currentTime,
+            ),
+          ],
+        );
+        await repository.restoreSnapshot(
+          expectedCurrent: before,
+          replacement: replacement,
+        );
+        await pumpEventQueue();
+        await subscription.cancel();
+
+        expect(emissions, isNotEmpty);
+        for (final emission in emissions) {
+          expect(emission == before || emission == replacement, isTrue);
+        }
+        expect(emissions.last, replacement);
+      },
+    );
+
+    test('schema version stays at 1', () {
+      expect(db.schemaVersion, 1);
+    });
+
+    test('export, restore, and reopen round-trip preserves every field on a temporary file database', () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'portability_stage2_roundtrip_',
+      );
+      final sourceFile = File(p.join(tempDir.path, 'source.sqlite'));
+      final targetFile = File(p.join(tempDir.path, 'target.sqlite'));
+      LibraryDatabase? sourceDb;
+      LibraryDatabase? targetDb;
+      LibraryDatabase? reopenedDb;
+      try {
+        final t0 = DateTime.utc(2026, 9, 5, 9, 0, 0);
+        final t1 = DateTime.utc(2026, 9, 5, 10, 15, 30);
+        final t2 = DateTime.utc(2026, 9, 6, 23, 59, 59);
+
+        sourceDb = LibraryDatabase.forTesting(NativeDatabase(sourceFile));
+        var currentUuid = '';
+        var seededAt = t0;
+        final sourceRepo = DriftLibraryRepository(
+          sourceDb,
+          uuidGenerator: () => currentUuid,
+          clock: () => seededAt,
+        );
+
+        final seededLibrary = LibrarySnapshot(
+          entries: [
+            Entry(
+              id: 'src-entry-1',
+              title: 'Rich entry',
+              body: 'Line one\r\nLine two\r\n',
+              keyword: '  rich  ',
+              categoryId: 'src-cat-used',
+              tagIds: ['src-tag-1', 'src-tag-2'],
+              isFavorite: true,
+              isArchived: true,
+              createdAt: t0,
+              updatedAt: t1,
+              lastCopiedAt: t2,
+            ),
+          ],
+          categories: [
+            Category(
+              id: 'src-cat-used',
+              name: 'Engineering',
+              normalizedName: 'engineering',
+              sortOrder: 0,
+              createdAt: t0,
+            ),
+            Category(
+              id: 'src-cat-unused',
+              name: 'Someday Maybe',
+              normalizedName: 'someday maybe',
+              sortOrder: 1,
+              createdAt: t0,
+            ),
+          ],
+          tags: [
+            Tag(
+              id: 'src-tag-1',
+              name: 'alpha',
+              normalizedName: 'alpha',
+              createdAt: t0,
+            ),
+            Tag(
+              id: 'src-tag-2',
+              name: 'beta',
+              normalizedName: 'beta',
+              createdAt: t0,
+            ),
+            Tag(
+              id: 'src-tag-unused',
+              name: 'lonely',
+              normalizedName: 'lonely',
+              createdAt: t0,
+            ),
+          ],
+        );
+        await sourceRepo.restoreSnapshot(
+          expectedCurrent: const LibrarySnapshot.empty(),
+          replacement: seededLibrary,
+        );
+
+        currentUuid = 'src-entry-2';
+        seededAt = t1;
+        await sourceRepo.createEntry(
+          EntryInput(
+            title: 'Plain entry',
+            body: 'Plain body',
+            keyword: 'plain',
+          ),
+        );
+
+        final exported = await sourceRepo.getSnapshot();
+        final bytes = LibraryJsonCodec().encode(
+          LibraryDocument(snapshot: exported, exportedAt: t2),
+        );
+        final document = LibraryJsonCodec().decode(bytes);
+
+        await sourceDb.close();
+        sourceDb = null;
+
+        targetDb = LibraryDatabase.forTesting(NativeDatabase(targetFile));
+        expect(targetDb.schemaVersion, 1);
+        final targetRepo = DriftLibraryRepository(targetDb);
+        final restored = await targetRepo.restoreSnapshot(
+          expectedCurrent: const LibrarySnapshot.empty(),
+          replacement: document.snapshot,
+        );
+        expect(restored, exported);
+        await targetDb.close();
+        targetDb = null;
+
+        reopenedDb = LibraryDatabase.forTesting(NativeDatabase(targetFile));
+        final reopened = await DriftLibraryRepository(reopenedDb).getSnapshot();
+        expect(reopened, exported);
+
+        final reopenedRich = reopened.entries.singleWhere(
+          (entry) => entry.id == 'src-entry-1',
+        );
+        expect(reopenedRich.keyword, '  rich  ');
+        expect(reopenedRich.body, 'Line one\r\nLine two\r\n');
+        expect(reopenedRich.isFavorite, isTrue);
+        expect(reopenedRich.isArchived, isTrue);
+        expect(reopenedRich.createdAt, t0);
+        expect(reopenedRich.updatedAt, t1);
+        expect(reopenedRich.lastCopiedAt, t2);
+        expect(reopenedRich.tagIds, ['src-tag-1', 'src-tag-2']);
+        expect(
+          reopened.categories.map((category) => category.id),
+          containsAll(['src-cat-used', 'src-cat-unused']),
+        );
+        expect(
+          reopened.tags.map((tag) => tag.id),
+          containsAll(['src-tag-1', 'src-tag-2', 'src-tag-unused']),
+        );
+      } finally {
+        if (sourceDb != null) {
+          await sourceDb.close();
+        }
+        if (targetDb != null) {
+          await targetDb.close();
+        }
+        if (reopenedDb != null) {
+          await reopenedDb.close();
+        }
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      }
+    });
+
+    test('updateEntryDetails keep intent preserves verbatim keyword across other-field changes', () async {
+      uuidValues.add('seed-1');
+      await repository.createEntry(
+        EntryInput(title: 'Seed', body: 'Seed body'),
+      );
+      final before = await repository.getSnapshot();
+      final t0 = DateTime.utc(2026, 9, 1, 8, 0, 0);
+      await repository.restoreSnapshot(
+        expectedCurrent: before,
+        replacement: LibrarySnapshot(
+          entries: [
+            Entry(
+              id: 'verbatim-1',
+              title: 'Original title',
+              body: 'Original body',
+              keyword: '  spaced alias  ',
+              createdAt: t0,
+              updatedAt: t0,
+            ),
+          ],
+        ),
+      );
+
+      final updated = await repository.updateEntryDetails(
+        'verbatim-1',
+        EntryUpdate(title: 'Changed title', body: 'Original body'),
+      );
+
+      expect(updated.keyword, '  spaced alias  ');
+      expect(updated.title, 'Changed title');
+      final stored = (await repository.getSnapshot()).entries.single;
+      expect(stored.keyword, '  spaced alias  ');
+    });
+
+    test('updateEntryDetails keep intent preserves null, empty, and blank keywords verbatim', () async {
+      final before = await repository.getSnapshot();
+      final t0 = DateTime.utc(2026, 9, 1, 8, 0, 0);
+      await repository.restoreSnapshot(
+        expectedCurrent: before,
+        replacement: LibrarySnapshot(
+          entries: [
+            Entry(
+              id: 'k-null',
+              title: 'Null',
+              body: 'B',
+              createdAt: t0,
+              updatedAt: t0,
+            ),
+            Entry(
+              id: 'k-empty',
+              title: 'Empty',
+              body: 'B',
+              keyword: '',
+              createdAt: t0,
+              updatedAt: t0,
+            ),
+            Entry(
+              id: 'k-blank',
+              title: 'Blank',
+              body: 'B',
+              keyword: '   ',
+              createdAt: t0,
+              updatedAt: t0,
+            ),
+          ],
+        ),
+      );
+
+      await repository.updateEntryDetails(
+        'k-null',
+        EntryUpdate(title: 'Null 2', body: 'B'),
+      );
+      await repository.updateEntryDetails(
+        'k-empty',
+        EntryUpdate(title: 'Empty 2', body: 'B'),
+      );
+      await repository.updateEntryDetails(
+        'k-blank',
+        EntryUpdate(title: 'Blank 2', body: 'B'),
+      );
+
+      final entries = await repository.getSnapshot();
+      expect(
+        entries.entries.singleWhere((entry) => entry.id == 'k-null').keyword,
+        isNull,
+      );
+      expect(
+        entries.entries.singleWhere((entry) => entry.id == 'k-empty').keyword,
+        '',
+      );
+      expect(
+        entries.entries.singleWhere((entry) => entry.id == 'k-blank').keyword,
+        '   ',
+      );
+    });
+
+    test(
+      'updateEntryDetails replace intent normalizes the requested keyword',
+      () async {
+        final before = await repository.getSnapshot();
+        final t0 = DateTime.utc(2026, 9, 1, 8, 0, 0);
+        await repository.restoreSnapshot(
+          expectedCurrent: before,
+          replacement: LibrarySnapshot(
+            entries: [
+              Entry(
+                id: 'r-1',
+                title: 'T',
+                body: 'B',
+                keyword: 'old alias',
+                createdAt: t0,
+                updatedAt: t0,
+              ),
+              Entry(
+                id: 'r-2',
+                title: 'T2',
+                body: 'B2',
+                keyword: 'old2',
+                createdAt: t0,
+                updatedAt: t0,
+              ),
+              Entry(
+                id: 'r-3',
+                title: 'T3',
+                body: 'B3',
+                keyword: 'old3',
+                createdAt: t0,
+                updatedAt: t0,
+              ),
+            ],
+          ),
+        );
+
+        final replaced = await repository.updateEntryDetails(
+          'r-1',
+          EntryUpdate(
+            title: 'T',
+            body: 'B',
+            keyword: const ReplaceKeyword('  new alias  '),
+          ),
+        );
+        expect(replaced.keyword, 'new alias');
+
+        final cleared = await repository.updateEntryDetails(
+          'r-2',
+          EntryUpdate(
+            title: 'T2',
+            body: 'B2',
+            keyword: const ReplaceKeyword('   '),
+          ),
+        );
+        expect(cleared.keyword, isNull);
+
+        final nulled = await repository.updateEntryDetails(
+          'r-3',
+          EntryUpdate(
+            title: 'T3',
+            body: 'B3',
+            keyword: const ReplaceKeyword(null),
+          ),
+        );
+        expect(nulled.keyword, isNull);
+      },
+    );
+
+    test('updateEntryDetails keyword-only replace bumps updatedAt while keep no-op leaves the row untouched', () async {
+      final before = await repository.getSnapshot();
+      final t0 = DateTime.utc(2026, 9, 1, 8, 0, 0);
+      final entry = Entry(
+        id: 'kw-1',
+        title: 'T',
+        body: 'B',
+        keyword: 'first',
+        createdAt: t0,
+        updatedAt: t0,
+      );
+      await repository.restoreSnapshot(
+        expectedCurrent: before,
+        replacement: LibrarySnapshot(entries: [entry]),
+      );
+
+      final untouched = await repository.updateEntryDetails(
+        'kw-1',
+        EntryUpdate(title: 'T', body: 'B'),
+      );
+      expect(untouched.updatedAt, t0);
+      expect((await repository.getSnapshot()).entries.single.updatedAt, t0);
+
+      currentTime = DateTime.utc(2026, 9, 2, 9, 0, 0);
+      final replaced = await repository.updateEntryDetails(
+        'kw-1',
+        EntryUpdate(
+          title: 'T',
+          body: 'B',
+          keyword: const ReplaceKeyword('second'),
+        ),
+      );
+      expect(replaced.keyword, 'second');
+      expect(replaced.updatedAt, currentTime);
+      expect((await repository.getSnapshot()).entries.single.keyword, 'second');
+    });
+
+    test(
+      'updateEntryDetails preserves createdAt and lastCopiedAt across updates',
+      () async {
+        final before = await repository.getSnapshot();
+        final t0 = DateTime.utc(2026, 9, 1, 8, 0, 0);
+        final tCopy = DateTime.utc(2026, 9, 1, 9, 0, 0);
+        await repository.restoreSnapshot(
+          expectedCurrent: before,
+          replacement: LibrarySnapshot(
+            entries: [
+              Entry(
+                id: 'p-1',
+                title: 'T',
+                body: 'B',
+                createdAt: t0,
+                updatedAt: t0,
+                lastCopiedAt: tCopy,
+              ),
+            ],
+          ),
+        );
+
+        final updated = await repository.updateEntryDetails(
+          'p-1',
+          EntryUpdate(title: 'New title', body: 'B'),
+        );
+
+        expect(updated.createdAt, t0);
+        expect(updated.lastCopiedAt, tCopy);
+      },
+    );
+
+    test('updateEntryDetails validates title, body, and references with typed failures and no writes', () async {
+      uuidValues.add('seed-1');
+      final seed = await repository.createEntry(
+        EntryInput(title: 'Seed', body: 'Seed body'),
+      );
+      final current = await repository.getSnapshot();
+
+      expect(
+        () => repository.updateEntryDetails(
+          seed.id,
+          EntryUpdate(title: '   ', body: 'B'),
+        ),
+        throwsA(
+          const LibraryFailure.invalidInput(
+            LibraryInputFailureReason.emptyTitle,
+          ),
+        ),
+      );
+      expect(
+        () => repository.updateEntryDetails(
+          seed.id,
+          EntryUpdate(title: 'T', body: '  '),
+        ),
+        throwsA(
+          const LibraryFailure.invalidInput(
+            LibraryInputFailureReason.emptyBody,
+          ),
+        ),
+      );
+      expect(
+        () => repository.updateEntryDetails(
+          seed.id,
+          EntryUpdate(title: 'T', body: 'B', categoryId: 'ghost-cat'),
+        ),
+        throwsA(
+          const LibraryFailure.invalidInput(
+            LibraryInputFailureReason.unknownCategory,
+          ),
+        ),
+      );
+      expect(
+        () => repository.updateEntryDetails(
+          seed.id,
+          EntryUpdate(title: 'T', body: 'B', tagIds: ['ghost-tag']),
+        ),
+        throwsA(
+          const LibraryFailure.invalidInput(
+            LibraryInputFailureReason.unknownTag,
+          ),
+        ),
+      );
+      expect(
+        () => repository.updateEntryDetails(
+          'missing',
+          EntryUpdate(title: 'T', body: 'B'),
+        ),
+        throwsA(LibraryFailure.entryNotFound(id: 'missing')),
+      );
+
+      expect(await repository.getSnapshot(), current);
     });
   });
 }

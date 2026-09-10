@@ -8,6 +8,7 @@ import 'package:prompt_library/src/library/data/library_repository.dart';
 import 'package:prompt_library/src/library/models/category.dart';
 import 'package:prompt_library/src/library/models/entry.dart';
 import 'package:prompt_library/src/library/models/entry_input.dart';
+import 'package:prompt_library/src/library/models/entry_update.dart';
 import 'package:prompt_library/src/library/models/library_failure.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/models/tag.dart';
@@ -333,6 +334,27 @@ final class _FakeLibraryRepository implements LibraryRepository {
   @override
   Future<Entry> updateEntry(String id, EntryInput input) {
     return _result('updateEntry:$id', _entry(id));
+  }
+
+  @override
+  Future<LibrarySnapshot> restoreSnapshot({
+    required LibrarySnapshot expectedCurrent,
+    required LibrarySnapshot replacement,
+  }) {
+    return _result('restoreSnapshot', const LibrarySnapshot.empty());
+  }
+
+  @override
+  Future<List<Entry>> addRaycastEntries({
+    required LibrarySnapshot expectedCurrent,
+    required List<RaycastEntryDraft> drafts,
+  }) {
+    return _result('addRaycastEntries', const <Entry>[]);
+  }
+
+  @override
+  Future<Entry> updateEntryDetails(String id, EntryUpdate update) {
+    return _result('updateEntryDetails:$id', _entry(id));
   }
 
   @override

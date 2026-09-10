@@ -8,6 +8,7 @@ import 'package:prompt_library/src/library/data/library_repository.dart';
 import 'package:prompt_library/src/library/models/category.dart';
 import 'package:prompt_library/src/library/models/entry.dart';
 import 'package:prompt_library/src/library/models/entry_input.dart';
+import 'package:prompt_library/src/library/models/entry_update.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/models/tag.dart';
 import 'package:prompt_library/src/library/presentation/derived_visible_entries.dart';
@@ -28,6 +29,22 @@ final class _FakeLibraryRepository implements LibraryRepository {
 
   @override
   Future<Entry> updateEntry(String id, EntryInput input) =>
+      throw UnimplementedError();
+
+  @override
+  Future<LibrarySnapshot> restoreSnapshot({
+    required LibrarySnapshot expectedCurrent,
+    required LibrarySnapshot replacement,
+  }) => throw UnimplementedError();
+
+  @override
+  Future<List<Entry>> addRaycastEntries({
+    required LibrarySnapshot expectedCurrent,
+    required List<RaycastEntryDraft> drafts,
+  }) => throw UnimplementedError();
+
+  @override
+  Future<Entry> updateEntryDetails(String id, EntryUpdate update) =>
       throw UnimplementedError();
 
   @override
