@@ -418,6 +418,9 @@ final class TestDocumentFiles implements LibraryDocumentFiles {
   /// Blocks the next pick call until completed.
   Completer<void>? pickGate;
 
+  /// Blocks the next export call until completed.
+  Completer<void>? exportGate;
+
   /// Recorded boundary calls.
   final List<String> calls = [];
 
@@ -439,6 +442,10 @@ final class TestDocumentFiles implements LibraryDocumentFiles {
   }) async {
     calls.add('exportDocument:$suggestedName');
     lastKind = kind;
+    final gate = exportGate;
+    if (gate != null) {
+      await gate.future;
+    }
     return exportResult!;
   }
 }

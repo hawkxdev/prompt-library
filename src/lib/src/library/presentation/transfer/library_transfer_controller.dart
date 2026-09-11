@@ -280,8 +280,10 @@ final class LibraryTransferController {
           _emit(LibraryTransferFailed(libraryFailure: failure));
         }
       } finally {
-        _library.endMaintenance();
-        _maintenanceActive = false;
+        if (_maintenanceActive) {
+          _library.endMaintenance();
+          _maintenanceActive = false;
+        }
       }
     });
   }

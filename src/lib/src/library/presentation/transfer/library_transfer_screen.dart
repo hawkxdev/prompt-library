@@ -83,30 +83,34 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
         final body = Padding(
           padding: const EdgeInsets.all(16),
           child: switch (_state) {
-            LibraryTransferIdle() => _buildIdle(context),
-            LibraryTransferExportReady() => _buildExportReady(context),
-            LibraryTransferRestoreReview(:final plan) => _buildRestoreReview(
-              plan,
+            LibraryTransferIdle() => _scroll(_buildIdle(context)),
+            LibraryTransferExportReady() => _scroll(_buildExportReady(context)),
+            LibraryTransferRestoreReview done => _buildRestoreReview(done.plan),
+            LibraryTransferRaycastReview done => _buildRaycastReview(done.plan),
+            LibraryTransferBackupRequired done => _scroll(
+              _buildBackupRequired(done),
             ),
-            LibraryTransferRaycastReview(:final plan) => _buildRaycastReview(
-              plan,
+            LibraryTransferBackupSaved done => _scroll(_buildBackupSaved(done)),
+            LibraryTransferBackupVerified done => _scroll(
+              _buildBackupVerified(done),
             ),
-            LibraryTransferBackupRequired() => _buildBackupRequired(context),
-            LibraryTransferBackupSaved() => _buildBackupSaved(context),
-            LibraryTransferBackupVerified() => _buildBackupVerified(context),
-            LibraryTransferStale() => _buildMessage(
-              context,
-              'The library changed during the operation.'
-              ' Start a new review to continue.',
+            LibraryTransferStale() => _scroll(
+              _buildMessage(
+                context,
+                'The library changed during the operation.'
+                ' Start a new review to continue.',
+              ),
             ),
             LibraryTransferApplying() => _buildMessage(
               context,
               'Applying the operation…',
             ),
-            LibraryTransferRestoreDone done => _buildRestoreDone(done),
-            LibraryTransferImportDone done => _buildImportDone(done),
-            LibraryTransferUnsupportedFile() => _buildUnsupported(context),
-            LibraryTransferFailed() => _buildFailed(context),
+            LibraryTransferRestoreDone done => _scroll(_buildRestoreDone(done)),
+            LibraryTransferImportDone done => _scroll(_buildImportDone(done)),
+            LibraryTransferUnsupportedFile() => _scroll(
+              _buildUnsupported(context),
+            ),
+            LibraryTransferFailed() => _scroll(_buildFailed(context)),
           },
         );
         return wide
@@ -120,6 +124,10 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
       },
     );
   }
+
+  /// Wraps fixed-height columns so large text scales scroll instead of
+  /// overflowing.
+  Widget _scroll(Widget child) => SingleChildScrollView(child: child);
 
   Widget _buildIdle(BuildContext context) {
     return Column(
@@ -173,6 +181,7 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
           ' Platform settings.',
           key: const Key('transfer-export-exclusions'),
         ),
+        Text('Each document is limited to 32 MiB.'),
         if (state.savedPath != null) ...[
           const SizedBox(height: 8),
           Text('Saved. Path: ${state.savedPath}'),
@@ -185,6 +194,7 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
         ),
         const SizedBox(height: 8),
         TextButton(
+          key: const Key('transfer-export-cancel'),
           onPressed: () => widget.transfer.cancel(),
           child: const Text('Cancel'),
         ),
@@ -193,7 +203,7 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
   }
 
   Widget _buildRestoreReview(LibraryRestorePlan plan) {
-    final differences = <Widget>[
+    final differences = [
       ..._differenceLines('Entry', plan.entries),
       ..._differenceLines('Category', plan.categories),
       ..._differenceLines('Tag', plan.tags),
@@ -204,12 +214,25 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
         Text('Review restore', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 12),
         Expanded(
-          child: ListView(
-            key: const Key('transfer-restore-differences'),
-            children: differences.isEmpty
-                ? const [Text('The document matches the current library.')]
-                : differences,
-          ),
+          child: differences.isEmpty
+              ? ListView(
+                  key: const Key('transfer-restore-differences'),
+                  children: const [
+                    Text('The document matches the current library.'),
+                  ],
+                )
+              : ListView.builder(
+                  key: const Key('transfer-restore-differences'),
+                  itemCount: differences.length,
+                  itemBuilder: (context, index) {
+                    final row = differences[index];
+                    return ListTile(
+                      dense: true,
+                      title: Text(row.$1),
+                      subtitle: row.$2 == null ? null : Text(row.$2!),
+                    );
+                  },
+                ),
         ),
         const SizedBox(height: 12),
         FilledButton(
@@ -226,17 +249,16 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
     );
   }
 
-  List<Widget> _differenceLines(
+  List<(String, String?)> _differenceLines(
     String collection,
     List<EntityDifference> rows,
   ) {
     return [
       for (final row in rows)
         if (row.kind != EntityChangeKind.unchanged)
-          ListTile(
-            dense: true,
-            title: Text('$collection ${row.kind.name}: ${row.id}'),
-            subtitle: row.fields.isEmpty ? null : Text(row.fields.join(', ')),
+          (
+            '$collection ${row.kind.name}: ${row.id}',
+            row.fields.isEmpty ? null : row.fields.join(', '),
           ),
     ];
   }
@@ -255,20 +277,21 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
         ),
         const SizedBox(height: 8),
         Expanded(
-          child: ListView(
+          child: ListView.builder(
             key: const Key('transfer-raycast-rows'),
-            children: [
-              for (final row in plan.rows)
-                CheckboxListTile(
-                  dense: true,
-                  value: row.outcome == ImportRowOutcome.selected,
-                  onChanged: row.source.snippet == null
-                      ? null
-                      : (_) => _toggle(_excluded, row.source.index),
-                  title: Text(row.source.snippet?.title ?? 'Invalid row'),
-                  subtitle: Text(row.outcome.name),
-                ),
-            ],
+            itemCount: plan.rows.length,
+            itemBuilder: (context, index) {
+              final row = plan.rows[index];
+              return CheckboxListTile(
+                dense: true,
+                value: row.outcome == ImportRowOutcome.selected,
+                onChanged: row.source.snippet == null
+                    ? null
+                    : (_) => _toggle(_excluded, row.source.index),
+                title: Text(row.source.snippet?.title ?? 'Invalid row'),
+                subtitle: Text(row.outcome.name),
+              );
+            },
           ),
         ),
         const SizedBox(height: 12),
@@ -279,6 +302,7 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
         ),
         const SizedBox(height: 8),
         TextButton(
+          key: const Key('transfer-export-cancel'),
           onPressed: () => widget.transfer.cancel(),
           child: const Text('Cancel'),
         ),
@@ -286,8 +310,7 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
     );
   }
 
-  Widget _buildBackupRequired(BuildContext context) {
-    final state = _state as LibraryTransferBackupRequired;
+  Widget _buildBackupRequired(LibraryTransferBackupRequired state) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -316,8 +339,7 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
     );
   }
 
-  Widget _buildBackupSaved(BuildContext context) {
-    final state = _state as LibraryTransferBackupSaved;
+  Widget _buildBackupSaved(LibraryTransferBackupSaved state) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -342,8 +364,7 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
     );
   }
 
-  Widget _buildBackupVerified(BuildContext context) {
-    final state = _state as LibraryTransferBackupVerified;
+  Widget _buildBackupVerified(LibraryTransferBackupVerified state) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -393,6 +414,9 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
 
   Widget _buildImportDone(LibraryTransferImportDone state) {
     final added = state.outcomeCounts[ImportRowOutcome.selected] ?? 0;
+    final skipped =
+        state.outcomeCounts.values.fold<int>(0, (sum, count) => sum + count) -
+        added;
     return Column(
       key: const Key('transfer-import-done'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -400,8 +424,7 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
         Text('Import finished', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 12),
         Text(
-          'Added: $added, Skipped:'
-          ' ${state.outcomeCounts.values.fold<int>(0, (sum, count) => sum + count) - added},'
+          'Added: $added, Skipped: $skipped,'
           ' Warnings: ${state.warningRowCount}.',
         ),
         const SizedBox(height: 16),

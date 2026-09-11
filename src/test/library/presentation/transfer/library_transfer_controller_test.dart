@@ -505,6 +505,143 @@ void main() {
       expect(controller.state, isA<LibraryTransferStale>());
     });
   });
+
+  group('operational coverage', () {
+    test('goes stale when markCopied lands after the review', () async {
+      await _startRestoreImport(repository, files, controller);
+
+      await repository.markCopied('kept-1');
+      await pumpEventQueue();
+
+      expect(controller.state, isA<LibraryTransferStale>());
+      await controller.apply();
+      expect(repository.calls, isNot(contains('restoreSnapshot')));
+    });
+
+    test(
+      'a cancelled backup copy returns to the review with the plan',
+      () async {
+        await _startRestoreImport(repository, files, controller);
+        await controller.continueFromReview();
+        files.exportResult = const DocumentExportCancelled();
+
+        await controller.createBackupCopy();
+
+        expect(controller.state, isA<LibraryTransferRestoreReview>());
+      },
+    );
+
+    test('an unavailable copy step reports the failure', () async {
+      await _startRestoreImport(repository, files, controller);
+      await controller.continueFromReview();
+      files.exportResult = const DocumentExportUnavailable();
+
+      await controller.createBackupCopy();
+
+      expect(controller.state, isA<LibraryTransferFailed>());
+    });
+
+    test('an unavailable verify step reports the failure', () async {
+      await _startRestoreImport(repository, files, controller);
+      await controller.continueFromReview();
+      files.exportResult = DocumentSaved(path: '/tmp/backup.json');
+      await controller.createBackupCopy();
+      files.pickResult = const DocumentPickUnavailable();
+
+      await controller.verifyBackupCopy();
+
+      expect(controller.state, isA<LibraryTransferFailed>());
+    });
+
+    test('a cancelled verify step stays on the saved backup', () async {
+      await _startRestoreImport(repository, files, controller);
+      await controller.continueFromReview();
+      files.exportResult = DocumentSaved(path: '/tmp/backup.json');
+      await controller.createBackupCopy();
+      files.pickResult = const DocumentPickCancelled();
+
+      await controller.verifyBackupCopy();
+
+      expect(controller.state, isA<LibraryTransferBackupSaved>());
+    });
+
+    test('a repeated export during the active one is ignored', () async {
+      final gate = Completer<void>();
+      files.exportGate = gate;
+      files.exportResult = DocumentSaved(path: '/tmp/one.json');
+      await controller.prepareExport(DocumentExportKind.json);
+
+      final first = controller.exportPrepared();
+      await controller.exportPrepared();
+      gate.complete();
+      await first;
+
+      expect(
+        files.calls.where((call) => call.startsWith('exportDocument:')),
+        hasLength(1),
+      );
+    });
+
+    test('a repeated apply during the active one is ignored', () async {
+      final expected = await _startRestoreImport(repository, files, controller);
+      await _verifyThroughBackup(files, controller, expected);
+      repository.nextMutationGate = Completer<void>();
+
+      final first = controller.apply();
+      await controller.apply();
+      repository.nextMutationGate!.complete();
+      await first;
+
+      expect(
+        repository.calls.where((call) => call == 'restoreSnapshot'),
+        hasLength(1),
+      );
+    });
+
+    test('dispose during the application releases the barrier', () async {
+      final expected = await _startRestoreImport(repository, files, controller);
+      await _verifyThroughBackup(files, controller, expected);
+      final gate = Completer<void>();
+      repository.nextMutationGate = gate;
+
+      final applying = controller.apply();
+      await pumpEventQueue();
+      await controller.dispose();
+      gate.complete();
+      await applying;
+      await pumpEventQueue();
+
+      expect(repository.calls, contains('restoreSnapshot'));
+      expect(library.state.isUnderMaintenance, isFalse);
+      final snapshot = await repository.getSnapshot();
+      expect(snapshot.entries.length, 2);
+    });
+
+    test('rejects an oversized pick before decoding', () async {
+      final limited = LibraryTransferController(
+        repository: repository,
+        library: library,
+        files: files,
+        limits: DocumentLimits(maxBytes: 8),
+      );
+      addTearDown(() => unawaited(limited.dispose()));
+      files.pickResult = DocumentPicked(
+        fileName: 'big.json',
+        bytes: Uint8List.fromList(List.filled(64, 123)),
+      );
+
+      await limited.startImport();
+
+      expect(
+        limited.state,
+        isA<LibraryTransferUnsupportedFile>().having(
+          (state) => state.failure.code,
+          'code',
+          DocumentFailureCode.limitExceeded,
+        ),
+      );
+    });
+  });
 }
 
 /// Starts a restore review over a document adding one entry.
