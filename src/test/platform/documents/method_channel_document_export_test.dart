@@ -103,18 +103,21 @@ void main() {
     expect(await send(), isA<DocumentExportUnavailable>());
   });
 
-  test('returns unavailable without touching the channel off macOS', () async {
-    var calls = 0;
-    responder = (call) async {
-      calls += 1;
-      return {'outcome': 'saved', 'path': '/tmp/l.json'};
-    };
+  test(
+    'returns unavailable without touching the channel off supported platforms',
+    () async {
+      var calls = 0;
+      responder = (call) async {
+        calls += 1;
+        return {'outcome': 'saved', 'path': '/tmp/l.json'};
+      };
 
-    final result = await send(supported: false);
+      final result = await send(supported: false);
 
-    expect(calls, 0);
-    expect(result, isA<DocumentExportUnavailable>());
-  });
+      expect(calls, 0);
+      expect(result, isA<DocumentExportUnavailable>());
+    },
+  );
 
   test('rejects invalid names locally without touching the channel', () async {
     var calls = 0;

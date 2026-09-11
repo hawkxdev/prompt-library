@@ -7,11 +7,11 @@ import 'package:flutter/services.dart';
 
 import '../../library/presentation/library_document_files.dart';
 
-/// Outbound client of the native macOS export channel.
+/// Outbound client of the native document export channel.
 final class MethodChannelDocumentExport {
   /// Creates the client with optional seams for tests.
   MethodChannelDocumentExport({BinaryMessenger? messenger, bool? supported})
-    : _supported = supported ?? Platform.isMacOS,
+    : _supported = supported ?? (Platform.isMacOS || Platform.isIOS),
       _channel = MethodChannel(
         MethodChannelDocumentExport.channelName,
         const StandardMethodCodec(),
