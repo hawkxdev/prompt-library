@@ -219,6 +219,37 @@ void main() {
       expect(dismissed.selectedEntryId, state.selectedEntryId);
     });
   });
+  group('LibraryState maintenance', () {
+    test('starts without maintenance and copies the flag', () {
+      final state = LibraryState.loading();
+      expect(state.isUnderMaintenance, isFalse);
+
+      final under = state.copyWith(isUnderMaintenance: true);
+      expect(under.isUnderMaintenance, isTrue);
+      expect(under.loadStatus, state.loadStatus);
+      expect(under.snapshot, state.snapshot);
+      expect(under.filter, state.filter);
+
+      final released = under.copyWith(isUnderMaintenance: false);
+      expect(released.isUnderMaintenance, isFalse);
+      expect(released, state);
+    });
+
+    test('includes the maintenance flag in equality', () {
+      final entry = _entry('entry-1');
+      final base = LibraryState(
+        loadStatus: LibraryLoadStatus.ready,
+        snapshot: LibrarySnapshot(entries: [entry]),
+        visibleEntries: [entry],
+        selectedEntryId: entry.id,
+      );
+      final maintained = base.copyWith(isUnderMaintenance: true);
+
+      expect(maintained, isNot(base));
+      expect(maintained.hashCode, isNot(base.hashCode));
+      expect(maintained.copyWith(isUnderMaintenance: false), base);
+    });
+  });
 }
 
 /// Creates deterministic entry.

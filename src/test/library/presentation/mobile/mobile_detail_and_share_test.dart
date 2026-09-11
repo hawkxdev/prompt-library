@@ -321,7 +321,7 @@ void main() {
     await pumpState(tester);
     await tester.pumpAndSettle();
 
-    expect(repository.calls, contains('updateEntry:entry-1'));
+    expect(repository.calls, contains('updateEntryDetails:entry-1'));
     expect(find.byKey(const Key('mobile-entry-editor-screen')), findsNothing);
     expect(find.byType(MobileEntryDetailScreen), findsOneWidget);
     expect(find.text('Updated title'), findsOneWidget);

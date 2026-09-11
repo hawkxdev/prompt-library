@@ -8,6 +8,7 @@ import 'package:flutter/semantics.dart';
 
 import '../models/entry.dart';
 import '../models/entry_input.dart';
+import '../models/entry_update.dart';
 import '../models/library_failure.dart';
 import 'library_controller.dart';
 import 'library_failure_message.dart';
@@ -39,6 +40,34 @@ LibraryMutationKey entryEditorMutationKey(Entry? entry) {
   return entry == null
       ? const LibraryMutationKey(LibraryMutationKind.createEntry)
       : LibraryMutationKey(LibraryMutationKind.updateEntry, entityId: entry.id);
+}
+
+/// Builds an update command from the draft of [entry].
+///
+/// The keyword intent comes from comparing the exact draft field with the
+/// stored keyword, never from the entry's origin; a cleared field is an
+/// explicit empty replacement, and an untouched field keeps the stored
+/// keyword verbatim, including blank and padded values.
+EntryUpdate entryUpdateFromDraft({
+  required Entry entry,
+  required String title,
+  required String body,
+  required String keyword,
+  String? categoryId,
+  Iterable<String> tagIds = const [],
+}) {
+  final KeywordUpdate keywordIntent = keyword == entry.keyword
+      ? const KeepExistingKeyword()
+      : ReplaceKeyword(keyword);
+  return EntryUpdate(
+    title: title,
+    body: body,
+    keyword: keywordIntent,
+    categoryId: categoryId,
+    tagIds: tagIds,
+    isFavorite: entry.isFavorite,
+    isArchived: entry.isArchived,
+  );
 }
 
 // === Form coordination ===
@@ -331,15 +360,6 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
       return;
     }
     final existing = widget.entry;
-    final input = EntryInput.validate(
-      title: _title.text,
-      body: _body.text,
-      keyword: _keyword.text,
-      categoryId: _categoryId,
-      tagIds: _tagIds,
-      isFavorite: existing?.isFavorite ?? false,
-      isArchived: existing?.isArchived ?? false,
-    );
     setState(() {
       _isSaving = true;
       _titleError = null;
@@ -349,9 +369,26 @@ final class _EntryEditorFormState extends State<EntryEditorForm> {
     _syncSaving();
     try {
       if (existing == null) {
+        final input = EntryInput.validate(
+          title: _title.text,
+          body: _body.text,
+          keyword: _keyword.text,
+          categoryId: _categoryId,
+          tagIds: _tagIds,
+        );
         await widget.controller.createEntry(input);
       } else {
-        await widget.controller.updateEntry(existing.id, input);
+        await widget.controller.updateEntryDetails(
+          existing.id,
+          entryUpdateFromDraft(
+            entry: existing,
+            title: _title.text,
+            body: _body.text,
+            keyword: _keyword.text,
+            categoryId: _categoryId,
+            tagIds: _tagIds,
+          ),
+        );
       }
       if (!mounted) return;
       setState(() {

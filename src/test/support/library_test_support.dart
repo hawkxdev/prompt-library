@@ -22,6 +22,9 @@ final class TestLibraryRepository implements LibraryRepository {
   /// Recorded mutation calls.
   final List<String> calls = [];
 
+  /// Captured update commands by entry identifier.
+  final Map<String, EntryUpdate> savedUpdates = {};
+
   /// Next typed mutation failure.
   LibraryFailure? nextFailure;
 
@@ -172,6 +175,7 @@ final class TestLibraryRepository implements LibraryRepository {
   @override
   Future<Entry> updateEntryDetails(String id, EntryUpdate update) async {
     calls.add('updateEntryDetails:$id');
+    savedUpdates[id] = update;
     await _waitIfNeeded();
     await _failIfNeeded();
     final current = _snapshot.entries.singleWhere((entry) => entry.id == id);
@@ -354,6 +358,7 @@ Entry testEntry(
   String id, {
   String title = 'Prompt title',
   String body = 'Prompt body',
+  String? keyword,
   String? categoryId,
   Iterable<String> tagIds = const [],
   bool isFavorite = false,
@@ -364,6 +369,7 @@ Entry testEntry(
     id: id,
     title: title,
     body: body,
+    keyword: keyword,
     categoryId: categoryId,
     tagIds: tagIds,
     isFavorite: isFavorite,

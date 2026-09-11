@@ -132,7 +132,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final updated = (await repository.getSnapshot()).entries.single;
-    expect(repository.calls, contains('updateEntry:entry-1'));
+    expect(repository.calls, contains('updateEntryDetails:entry-1'));
     expect(updated.title, 'Updated title');
     expect(updated.body, 'Updated body');
     expect(find.byKey(const Key('mobile-entry-editor-screen')), findsNothing);

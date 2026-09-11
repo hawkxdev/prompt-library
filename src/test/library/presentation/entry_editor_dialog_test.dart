@@ -6,8 +6,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompt_library/src/library/models/entry.dart';
-import 'package:prompt_library/src/library/models/library_failure.dart';
 import 'package:prompt_library/src/library/models/entry_input.dart';
+import 'package:prompt_library/src/library/models/entry_update.dart';
+import 'package:prompt_library/src/library/models/library_failure.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/entry_editor_dialog.dart';
 import 'package:prompt_library/src/library/presentation/entry_editor_form.dart';
@@ -426,7 +427,7 @@ void main() {
     expect(body.controller!.text, 'Second body');
 
     await tester.runAsync(formController.save);
-    expect(repository.calls, contains('updateEntry:entry-2'));
+    expect(repository.calls, contains('updateEntryDetails:entry-2'));
     final snapshot = await repository.getSnapshot();
     expect(
       snapshot.entries.singleWhere((entry) => entry.id == 'entry-2').title,
@@ -439,6 +440,152 @@ void main() {
     await tester.runAsync(() async {
       await controller.dispose();
       await repository.close();
+    });
+  });
+  group('keyword intent', () {
+    testWidgets('keeps the stored keyword when only the title changes', (
+      tester,
+    ) async {
+      final repository = TestLibraryRepository();
+      final controller = LibraryController(repository: repository);
+      addTearDown(() async {
+        await controller.dispose();
+        await repository.close();
+      });
+      final entry = testEntry(
+        'entry-1',
+        title: 'Old title',
+        body: 'Body',
+        keyword: '  alias  ',
+      );
+      repository.emit(LibrarySnapshot(entries: [entry]));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showEntryEditorDialog(
+                context,
+                controller: controller,
+                entry: entry,
+              ),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const Key('editor-title')),
+        'New title',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+
+      expect(repository.calls, contains('updateEntryDetails:entry-1'));
+      expect(
+        repository.savedUpdates['entry-1']?.keyword,
+        isA<KeepExistingKeyword>(),
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 1));
+    });
+
+    testWidgets('replaces the keyword when the field changed', (tester) async {
+      final repository = TestLibraryRepository();
+      final controller = LibraryController(repository: repository);
+      addTearDown(() async {
+        await controller.dispose();
+        await repository.close();
+      });
+      final entry = testEntry(
+        'entry-1',
+        title: 'Title',
+        body: 'Body',
+        keyword: '  alias  ',
+      );
+      repository.emit(LibrarySnapshot(entries: [entry]));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showEntryEditorDialog(
+                context,
+                controller: controller,
+                entry: entry,
+              ),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const Key('editor-keyword')),
+        ' new alias ',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+
+      final intent = repository.savedUpdates['entry-1']?.keyword;
+      expect(intent, isA<ReplaceKeyword>());
+      expect((intent as ReplaceKeyword).value, ' new alias ');
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 1));
+    });
+
+    testWidgets('clears the keyword with an empty replacement', (tester) async {
+      final repository = TestLibraryRepository();
+      final controller = LibraryController(repository: repository);
+      addTearDown(() async {
+        await controller.dispose();
+        await repository.close();
+      });
+      final entry = testEntry(
+        'entry-1',
+        title: 'Title',
+        body: 'Body',
+        keyword: 'alias',
+      );
+      repository.emit(LibrarySnapshot(entries: [entry]));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showEntryEditorDialog(
+                context,
+                controller: controller,
+                entry: entry,
+              ),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pump();
+      await tester.enterText(find.byKey(const Key('editor-keyword')), '');
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+
+      final intent = repository.savedUpdates['entry-1']?.keyword;
+      expect(intent, isA<ReplaceKeyword>());
+      expect((intent as ReplaceKeyword).value, '');
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 1));
     });
   });
 }

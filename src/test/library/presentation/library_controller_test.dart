@@ -256,6 +256,129 @@ void main() {
       expect(controller.state.activeMutations, isEmpty);
     });
   });
+  // === Maintenance tests ===
+  group('LibraryController maintenance', () {
+    test('rejects new mutations while maintenance is active', () async {
+      repository.emit(LibrarySnapshot(entries: [_entry('entry-1')]));
+      await pumpEventQueue();
+
+      await controller.beginMaintenance();
+      expect(controller.state.isUnderMaintenance, isTrue);
+      expect(() => controller.deleteEntry('entry-1'), throwsStateError);
+      expect(repository.calls, isNot(contains('deleteEntry:entry-1')));
+
+      controller.endMaintenance();
+      expect(controller.state.isUnderMaintenance, isFalse);
+      await controller.deleteEntry('entry-1');
+      expect(repository.calls, contains('deleteEntry:entry-1'));
+    });
+
+    test(
+      'waits for the in-flight mutation before resolving the barrier',
+      () async {
+        repository.emit(LibrarySnapshot(entries: [_entry('entry-1')]));
+        await pumpEventQueue();
+        final gate = repository.block('markCopied:entry-1');
+
+        final copy = controller.markCopied('entry-1');
+        final barrier = controller.beginMaintenance();
+        await pumpEventQueue();
+        expect(controller.state.isUnderMaintenance, isTrue);
+
+        var resolved = false;
+        unawaited(barrier.then((_) => resolved = true));
+        await pumpEventQueue();
+        expect(
+          resolved,
+          isFalse,
+          reason: 'barrier waits for the in-flight copy',
+        );
+
+        gate.complete();
+        await copy;
+        await barrier;
+        expect(controller.state.isUnderMaintenance, isTrue);
+        expect(controller.state.activeMutations, isEmpty);
+
+        controller.endMaintenance();
+        expect(controller.state.isUnderMaintenance, isFalse);
+      },
+    );
+
+    test(
+      'releases the barrier when the in-flight mutation fails typed',
+      () async {
+        repository.emit(LibrarySnapshot(entries: [_entry('entry-1')]));
+        await pumpEventQueue();
+        final failure = LibraryFailure.databaseFailure(
+          code: LibraryDatabaseFailureCode.transactionFailed,
+        );
+        repository.failNext('markCopied:entry-1', failure);
+
+        final copy = controller.markCopied('entry-1');
+        final barrier = controller.beginMaintenance();
+        await expectLater(copy, throwsA(same(failure)));
+        await barrier;
+
+        expect(controller.state.isUnderMaintenance, isTrue);
+        expect(controller.state.activeMutations, isEmpty);
+        controller.endMaintenance();
+      },
+    );
+
+    test(
+      'releases the barrier when the in-flight mutation fails unexpectedly',
+      () async {
+        final error = StateError('programming error');
+        repository.failNext('markCopied:entry-1', error);
+
+        final copy = controller.markCopied('entry-1');
+        final barrier = controller.beginMaintenance();
+        await expectLater(copy, throwsA(same(error)));
+        await barrier;
+
+        expect(controller.state.isUnderMaintenance, isTrue);
+        expect(controller.state.activeMutations, isEmpty);
+        controller.endMaintenance();
+      },
+    );
+
+    test('rejects repeated begin and unpaired end', () async {
+      await controller.beginMaintenance();
+      expect(() => controller.beginMaintenance(), throwsStateError);
+      controller.endMaintenance();
+      expect(() => controller.endMaintenance(), throwsStateError);
+    });
+
+    test('routes updateEntryDetails with the same update instance', () async {
+      final update = EntryUpdate(
+        title: 'New title',
+        body: 'New body',
+        keyword: const ReplaceKeyword(' alias '),
+      );
+
+      await controller.updateEntryDetails('entry-1', update);
+
+      expect(repository.calls, ['updateEntryDetails:entry-1']);
+      expect(repository.updates['entry-1'], same(update));
+      expect(controller.state.activeMutations, isEmpty);
+    });
+
+    test('deduplicates in-flight updateEntryDetails by key', () async {
+      final gate = repository.block('updateEntryDetails:entry-1');
+      final update = EntryUpdate(title: 'T', body: 'B');
+
+      final first = controller.updateEntryDetails('entry-1', update);
+      final duplicate = controller.updateEntryDetails('entry-1', update);
+
+      expect(identical(first, duplicate), isTrue);
+      expect(repository.calls, ['updateEntryDetails:entry-1']);
+
+      gate.complete();
+      await Future.wait([first, duplicate]);
+      expect(controller.state.activeMutations, isEmpty);
+    });
+  });
 
   // === Disposal tests ===
   group('LibraryController disposal', () {
@@ -287,6 +410,9 @@ final class _FakeLibraryRepository implements LibraryRepository {
       StreamController<LibrarySnapshot>.broadcast();
   final Map<String, Completer<void>> _gates = {};
   final Map<String, Object> _errors = {};
+
+  /// Captured update commands by entry identifier.
+  final Map<String, EntryUpdate> updates = {};
 
   /// Recorded repository calls.
   final List<String> calls = [];
@@ -354,6 +480,7 @@ final class _FakeLibraryRepository implements LibraryRepository {
 
   @override
   Future<Entry> updateEntryDetails(String id, EntryUpdate update) {
+    updates[id] = update;
     return _result('updateEntryDetails:$id', _entry(id));
   }
 

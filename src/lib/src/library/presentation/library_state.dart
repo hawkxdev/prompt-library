@@ -110,6 +110,7 @@ final class LibraryState {
     Iterable<Entry> visibleEntries = const [],
     this.selectedEntryId,
     Iterable<LibraryMutationKey> activeMutations = const [],
+    this.isUnderMaintenance = false,
     this.failure,
   }) : filter = filter ?? LibraryFilter(),
        visibleEntries = _freezeEntries(visibleEntries),
@@ -139,6 +140,9 @@ final class LibraryState {
 
   /// Pending mutation keys.
   final List<LibraryMutationKey> activeMutations;
+
+  /// Whether mutation intake is suspended for a transfer operation.
+  final bool isUnderMaintenance;
 
   /// Current typed failure.
   final LibraryFailure? failure;
@@ -188,7 +192,6 @@ final class LibraryState {
     );
   }
 
-  /// Copies state values.
   LibraryState copyWith({
     LibraryLoadStatus? loadStatus,
     Object? snapshot = _unset,
@@ -196,6 +199,7 @@ final class LibraryState {
     Iterable<Entry>? visibleEntries,
     Object? selectedEntryId = _unset,
     Iterable<LibraryMutationKey>? activeMutations,
+    bool? isUnderMaintenance,
     Object? failure = _unset,
   }) {
     return LibraryState(
@@ -209,6 +213,7 @@ final class LibraryState {
           ? this.selectedEntryId
           : selectedEntryId as String?,
       activeMutations: activeMutations ?? this.activeMutations,
+      isUnderMaintenance: isUnderMaintenance ?? this.isUnderMaintenance,
       failure: identical(failure, _unset)
           ? this.failure
           : failure as LibraryFailure?,
@@ -225,6 +230,7 @@ final class LibraryState {
             _listEquals(other.visibleEntries, visibleEntries) &&
             other.selectedEntryId == selectedEntryId &&
             _listEquals(other.activeMutations, activeMutations) &&
+            other.isUnderMaintenance == isUnderMaintenance &&
             other.failure == failure;
   }
 
@@ -237,6 +243,7 @@ final class LibraryState {
       Object.hashAll(visibleEntries),
       selectedEntryId,
       Object.hashAll(activeMutations),
+      isUnderMaintenance,
       failure,
     );
   }

@@ -5,6 +5,7 @@ import 'dart:async';
 
 import '../data/library_repository.dart';
 import '../models/entry_input.dart';
+import '../models/entry_update.dart';
 import '../models/library_failure.dart';
 import '../models/library_snapshot.dart';
 import 'derived_visible_entries.dart';
@@ -113,6 +114,14 @@ final class LibraryController {
     );
   }
 
+  /// Updates entry details with an explicit keyword intent.
+  Future<void> updateEntryDetails(String id, EntryUpdate update) {
+    return _runMutation(
+      LibraryMutationKey(LibraryMutationKind.updateEntry, entityId: id),
+      () => _repository.updateEntryDetails(id, update),
+    );
+  }
+
   /// Deletes library entry.
   Future<void> deleteEntry(String id) {
     return _runMutation(
@@ -209,6 +218,36 @@ final class LibraryController {
     );
   }
 
+  /// Enters maintenance, rejecting new mutations until it ends.
+  ///
+  /// The returned future resolves after every already-started mutation
+  /// settles; their outcomes are delivered to their own callers.
+  Future<void> beginMaintenance() {
+    _ensureActive();
+    if (_state.isUnderMaintenance) {
+      throw StateError('LibraryController is already under maintenance');
+    }
+    _emit(_state.copyWith(isUnderMaintenance: true));
+    final pending = _inFlightMutations.values.toList(growable: false);
+    if (pending.isEmpty) {
+      return Future<void>.value();
+    }
+    return Future.wait(
+      pending.map(
+        (future) => future.then<void>((_) {}, onError: (Object _) {}),
+      ),
+    );
+  }
+
+  /// Leaves maintenance and resumes mutation intake.
+  void endMaintenance() {
+    _ensureActive();
+    if (!_state.isUnderMaintenance) {
+      throw StateError('LibraryController is not under maintenance');
+    }
+    _emit(_state.copyWith(isUnderMaintenance: false));
+  }
+
   /// Disposes controller resources.
   Future<void> dispose() {
     return _disposeFuture ??= _dispose();
@@ -272,6 +311,9 @@ final class LibraryController {
     Future<void> Function() operation,
   ) {
     _ensureActive();
+    if (_state.isUnderMaintenance) {
+      throw StateError('LibraryController is under maintenance');
+    }
     final existing = _inFlightMutations[key];
     if (existing != null) {
       return existing;
