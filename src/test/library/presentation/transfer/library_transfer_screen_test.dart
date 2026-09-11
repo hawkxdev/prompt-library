@@ -5,10 +5,12 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:prompt_library/src/library/models/library_failure.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
 import 'package:prompt_library/src/library/presentation/library_document_files.dart';
 import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_state.dart';
 import 'package:prompt_library/src/library/presentation/transfer/library_transfer_screen.dart';
 import 'package:prompt_library/src/library/transfer/library_document.dart';
 import 'package:prompt_library/src/library/transfer/library_json_codec.dart';
@@ -131,6 +133,110 @@ void main() {
     expect(find.text('Export JSON'), findsOneWidget);
     expect(find.text('Export Markdown'), findsOneWidget);
     expect(find.text('Import from file…'), findsOneWidget);
+  });
+
+  group('backup and application flow', () {
+    testWidgets('drives restore from review to the done summary', (
+      tester,
+    ) async {
+      repository.emit(LibrarySnapshot(entries: [testEntry('kept-1')]));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      final document = LibraryDocument(
+        snapshot: LibrarySnapshot(
+          entries: [testEntry('kept-1'), testEntry('incoming-1')],
+        ),
+        exportedAt: DateTime.utc(2026, 9, 1),
+      );
+      files.pickResult = DocumentPicked(
+        fileName: 'library.json',
+        bytes: LibraryJsonCodec().encode(document),
+      );
+      await transfer.startImport();
+      await pumpScreen(tester);
+
+      await tester.tap(find.byKey(const Key('transfer-restore-continue')));
+      await tester.pump();
+      expect(transfer.state, isA<LibraryTransferBackupRequired>());
+      files.exportResult = DocumentSaved(path: '/tmp/backup.json');
+      await tester.tap(find.byKey(const Key('transfer-backup-save')));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+      final currentSnapshot = await repository.getSnapshot();
+      files.pickResult = DocumentPicked(
+        fileName: 'backup.json',
+        bytes: LibraryJsonCodec().encode(
+          LibraryDocument(
+            snapshot: currentSnapshot,
+            exportedAt: DateTime.utc(2026),
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(const Key('transfer-backup-verify')));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('transfer-apply')));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+
+      expect(find.byKey(const Key('transfer-restore-done')), findsOneWidget);
+      expect(
+        find.textContaining('prompt-library-backup-2026-09-11'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('returns to the review after a repository failure', (
+      tester,
+    ) async {
+      repository.emit(LibrarySnapshot(entries: [testEntry('kept-1')]));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      final document = LibraryDocument(
+        snapshot: LibrarySnapshot(
+          entries: [testEntry('kept-1'), testEntry('incoming-1')],
+        ),
+        exportedAt: DateTime.utc(2026, 9, 1),
+      );
+      files.pickResult = DocumentPicked(
+        fileName: 'library.json',
+        bytes: LibraryJsonCodec().encode(document),
+      );
+      await transfer.startImport();
+      await pumpScreen(tester);
+      await tester.tap(find.byKey(const Key('transfer-restore-continue')));
+      await tester.pump();
+      files.exportResult = DocumentSaved(path: '/tmp/backup.json');
+      await tester.tap(find.byKey(const Key('transfer-backup-save')));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+      final currentSnapshot = await repository.getSnapshot();
+      files.pickResult = DocumentPicked(
+        fileName: 'backup.json',
+        bytes: LibraryJsonCodec().encode(
+          LibraryDocument(
+            snapshot: currentSnapshot,
+            exportedAt: DateTime.utc(2026),
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(const Key('transfer-backup-verify')));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+      repository.nextFailure = LibraryFailure.databaseFailure(
+        code: LibraryDatabaseFailureCode.transactionFailed,
+      );
+      await tester.tap(find.byKey(const Key('transfer-apply')));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+
+      expect(find.byKey(const Key('transfer-failed')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('transfer-back-to-review')));
+      await tester.pump();
+
+      expect(
+        find.byKey(const Key('transfer-restore-differences')),
+        findsOneWidget,
+      );
+    });
   });
 }
 

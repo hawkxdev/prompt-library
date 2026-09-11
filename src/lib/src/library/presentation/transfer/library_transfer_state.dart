@@ -1,6 +1,7 @@
 /// Immutable transfer operation states.
 library;
 
+import '../../models/library_failure.dart';
 import '../../transfer/library_document.dart';
 import '../../transfer/library_transfer_plan.dart';
 import '../library_document_files.dart';
@@ -169,8 +170,9 @@ final class LibraryTransferBackupVerified extends LibraryTransferState {
   /// Creates the backup-verified state.
   const LibraryTransferBackupVerified({required this.backupName});
 
-  /// Name of the verified external copy.
-  final String backupName;
+  /// Name of the verified external copy; null when the current library is
+  /// empty and the HLD waives the copy.
+  final String? backupName;
 
   @override
   bool operator ==(Object other) =>
@@ -325,7 +327,7 @@ final class LibraryTransferUnsupportedFile extends LibraryTransferState {
 /// A file-boundary operation failed.
 final class LibraryTransferFailed extends LibraryTransferState {
   /// Creates the failed state.
-  const LibraryTransferFailed({this.code, this.failure});
+  const LibraryTransferFailed({this.code, this.failure, this.libraryFailure});
 
   /// Boundary failure reason, when the boundary reported one.
   final DocumentFileFailureCode? code;
@@ -333,16 +335,26 @@ final class LibraryTransferFailed extends LibraryTransferState {
   /// Content failure reason, when preparation rejected the document.
   final DocumentFailure? failure;
 
+  /// Repository failure of the atomic application; the review plan stays
+  /// alive when this is set.
+  final LibraryFailure? libraryFailure;
+
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is LibraryTransferFailed &&
           other.code == code &&
-          _failureEquals(other.failure, failure);
+          _failureEquals(other.failure, failure) &&
+          other.libraryFailure == libraryFailure;
 
   @override
-  int get hashCode =>
-      Object.hash(runtimeType, code, failure?.code, failure?.field);
+  int get hashCode => Object.hash(
+    runtimeType,
+    code,
+    failure?.code,
+    failure?.field,
+    libraryFailure,
+  );
 
   @override
   String toString() => 'LibraryTransferFailed(code: $code, failure: $failure)';

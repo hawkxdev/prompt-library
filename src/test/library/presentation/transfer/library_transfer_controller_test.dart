@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:prompt_library/src/library/models/library_failure.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
 import 'package:prompt_library/src/library/presentation/library_document_files.dart';
@@ -332,6 +333,218 @@ void main() {
       expect(controller.state, isA<LibraryTransferRaycastReview>());
     });
   });
+  group('backup and application', () {
+    test('requires a backup copy for a non-empty library', () async {
+      final expected = await _startRestoreImport(repository, files, controller);
+      expect(expected.entries, hasLength(1));
+
+      await controller.continueFromReview();
+
+      final state = controller.state as LibraryTransferBackupRequired;
+      expect(state.backupName, 'prompt-library-backup-2026-09-11.json');
+      expect(state.backupName.contains(':'), isFalse);
+    });
+
+    test('skips the copy for an empty library', () async {
+      final incoming = LibraryDocument(
+        snapshot: LibrarySnapshot(entries: [testEntry('incoming-1')]),
+        exportedAt: DateTime.utc(2026, 9, 1),
+      );
+      files.pickResult = DocumentPicked(
+        fileName: 'library.json',
+        bytes: LibraryJsonCodec().encode(incoming),
+      );
+      await controller.startImport();
+
+      await controller.continueFromReview();
+
+      expect(
+        controller.state,
+        const LibraryTransferBackupVerified(backupName: null),
+      );
+    });
+
+    test('apply without a verified copy is rejected', () async {
+      await _startRestoreImport(repository, files, controller);
+
+      await controller.apply();
+
+      expect(repository.calls, isNot(contains('restoreSnapshot')));
+      expect(controller.state, isA<LibraryTransferRestoreReview>());
+    });
+
+    test('verification passes when the re-read copy matches', () async {
+      final expected = await _startRestoreImport(repository, files, controller);
+      await controller.continueFromReview();
+      files.exportResult = DocumentSaved(path: '/tmp/backup.json');
+      await controller.createBackupCopy();
+      expect(controller.state, isA<LibraryTransferBackupSaved>());
+
+      files.pickResult = DocumentPicked(
+        fileName: 'backup.json',
+        bytes: LibraryJsonCodec().encode(
+          LibraryDocument(snapshot: expected, exportedAt: DateTime.utc(2026)),
+        ),
+      );
+      await controller.verifyBackupCopy();
+
+      expect(controller.state, isA<LibraryTransferBackupVerified>());
+    });
+
+    test(
+      'verification mismatch returns to the review and blocks apply',
+      () async {
+        await _startRestoreImport(repository, files, controller);
+        await controller.continueFromReview();
+        files.exportResult = DocumentSaved(path: '/tmp/backup.json');
+        await controller.createBackupCopy();
+
+        final drifted = LibraryDocument(
+          snapshot: LibrarySnapshot(
+            entries: [
+              testEntry('kept-1', lastCopiedAt: DateTime.utc(2026, 9, 10)),
+            ],
+          ),
+          exportedAt: DateTime.utc(2026, 9, 1),
+        );
+        files.pickResult = DocumentPicked(
+          fileName: 'backup.json',
+          bytes: LibraryJsonCodec().encode(drifted),
+        );
+        await controller.verifyBackupCopy();
+
+        expect(controller.state, isA<LibraryTransferRestoreReview>());
+        await controller.apply();
+        expect(repository.calls, isNot(contains('restoreSnapshot')));
+      },
+    );
+
+    test('apply restore reports counts and releases the barrier', () async {
+      final expected = await _startRestoreImport(repository, files, controller);
+      await _verifyThroughBackup(files, controller, expected);
+
+      await controller.apply();
+
+      expect(repository.calls, contains('restoreSnapshot'));
+      final done = controller.state as LibraryTransferRestoreDone;
+      expect(done.entriesChanged, 1);
+      expect(done.categoriesChanged, 0);
+      expect(done.backupName, 'prompt-library-backup-2026-09-11.json');
+      expect(library.state.isUnderMaintenance, isFalse);
+      await library.markCopied('kept-1');
+    });
+
+    test('apply raycast keeps the verbatim keyword of selected rows', () async {
+      await _startRaycastImport(repository, files, controller);
+      await controller.continueFromReview();
+      final expected = await repository.getSnapshot();
+      files.exportResult = DocumentSaved(path: '/tmp/backup.json');
+      await controller.createBackupCopy();
+      files.pickResult = DocumentPicked(
+        fileName: 'backup.json',
+        bytes: LibraryJsonCodec().encode(
+          LibraryDocument(snapshot: expected, exportedAt: DateTime.utc(2026)),
+        ),
+      );
+      await controller.verifyBackupCopy();
+
+      await controller.apply();
+
+      expect(repository.calls, contains('addRaycastEntries'));
+      final done = controller.state as LibraryTransferImportDone;
+      expect(done.outcomeCounts[ImportRowOutcome.selected], 2);
+      final snapshot = await repository.getSnapshot();
+      final alpha = snapshot.entries.singleWhere(
+        (entry) => entry.title == 'Alpha',
+      );
+      expect(alpha.keyword, '  al  ');
+      expect(
+        snapshot.entries.singleWhere((entry) => entry.title == 'Beta').body,
+        'Body B',
+      );
+    });
+
+    test(
+      'repository failure keeps the plan alive and releases the barrier',
+      () async {
+        final expected = await _startRestoreImport(
+          repository,
+          files,
+          controller,
+        );
+        await _verifyThroughBackup(files, controller, expected);
+        repository.nextFailure = LibraryFailure.databaseFailure(
+          code: LibraryDatabaseFailureCode.transactionFailed,
+        );
+
+        await controller.apply();
+
+        final state = controller.state as LibraryTransferFailed;
+        expect(state.libraryFailure, isNotNull);
+        expect(library.state.isUnderMaintenance, isFalse);
+        await library.markCopied('kept-1');
+      },
+    );
+
+    test('staleness before apply rejects the application', () async {
+      await _startRestoreImport(repository, files, controller);
+      await controller.continueFromReview();
+
+      repository.emit(
+        LibrarySnapshot(
+          entries: [
+            testEntry('kept-1', lastCopiedAt: DateTime.utc(2026, 9, 10)),
+          ],
+        ),
+      );
+      await pumpEventQueue();
+
+      await controller.apply();
+
+      expect(repository.calls, isNot(contains('restoreSnapshot')));
+      expect(controller.state, isA<LibraryTransferStale>());
+    });
+  });
+}
+
+/// Starts a restore review over a document adding one entry.
+Future<LibrarySnapshot> _startRestoreImport(
+  TestLibraryRepository repository,
+  TestDocumentFiles files,
+  LibraryTransferController controller,
+) async {
+  repository.emit(LibrarySnapshot(entries: [testEntry('kept-1')]));
+  await pumpEventQueue();
+  final document = LibraryDocument(
+    snapshot: LibrarySnapshot(
+      entries: [testEntry('kept-1'), testEntry('incoming-1')],
+    ),
+    exportedAt: DateTime.utc(2026, 9, 1),
+  );
+  files.pickResult = DocumentPicked(
+    fileName: 'library.json',
+    bytes: LibraryJsonCodec().encode(document),
+  );
+  await controller.startImport();
+  return repository.getSnapshot();
+}
+
+/// Drives the backup copy step up to the verified state.
+Future<void> _verifyThroughBackup(
+  TestDocumentFiles files,
+  LibraryTransferController controller,
+  LibrarySnapshot expected,
+) async {
+  await controller.continueFromReview();
+  files.exportResult = DocumentSaved(path: '/tmp/backup.json');
+  await controller.createBackupCopy();
+  files.pickResult = DocumentPicked(
+    fileName: 'backup.json',
+    bytes: LibraryJsonCodec().encode(
+      LibraryDocument(snapshot: expected, exportedAt: DateTime.utc(2026)),
+    ),
+  );
+  await controller.verifyBackupCopy();
 }
 
 /// Starts an import over a two-row Raycast file with one seeded entry.
@@ -345,8 +558,8 @@ Future<RaycastImportPlan> _startRaycastImport(
   files.pickResult = DocumentPicked(
     fileName: 'snippets.json',
     bytes: _bytes(
-      '[{"name":"Alpha","text":"Body A"},'
-      '{"name":"Alpha","text":"Body A"}]',
+      '[{"name":"Alpha","text":"Body A","keyword":"  al  "},'
+      '{"name":"Beta","text":"Body B"}]',
     ),
   );
   await controller.startImport();

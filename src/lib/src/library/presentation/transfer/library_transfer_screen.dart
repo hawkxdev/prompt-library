@@ -91,18 +91,9 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
             LibraryTransferRaycastReview(:final plan) => _buildRaycastReview(
               plan,
             ),
-            LibraryTransferBackupRequired(:final backupName) => _buildMessage(
-              context,
-              'A verified backup copy is required: $backupName',
-            ),
-            LibraryTransferBackupSaved(:final backupName) => _buildMessage(
-              context,
-              'Backup saved as $backupName; now re-open it to verify.',
-            ),
-            LibraryTransferBackupVerified(:final backupName) => _buildMessage(
-              context,
-              'Backup $backupName verified. Confirm to apply.',
-            ),
+            LibraryTransferBackupRequired() => _buildBackupRequired(context),
+            LibraryTransferBackupSaved() => _buildBackupSaved(context),
+            LibraryTransferBackupVerified() => _buildBackupVerified(context),
             LibraryTransferStale() => _buildMessage(
               context,
               'The library changed during the operation.'
@@ -112,19 +103,10 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
               context,
               'Applying the operation…',
             ),
-            LibraryTransferRestoreDone() => _buildMessage(
-              context,
-              'Library restored.',
-            ),
-            LibraryTransferImportDone() => _buildMessage(
-              context,
-              'Import finished.',
-            ),
+            LibraryTransferRestoreDone done => _buildRestoreDone(done),
+            LibraryTransferImportDone done => _buildImportDone(done),
             LibraryTransferUnsupportedFile() => _buildUnsupported(context),
-            LibraryTransferFailed() => _buildMessage(
-              context,
-              'The transfer operation failed.',
-            ),
+            LibraryTransferFailed() => _buildFailed(context),
           },
         );
         return wide
@@ -211,10 +193,11 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
   }
 
   Widget _buildRestoreReview(LibraryRestorePlan plan) {
-    final differences = <Widget>[];
-    differences.addAll(_differenceLines('Entry', plan.entries));
-    differences.addAll(_differenceLines('Category', plan.categories));
-    differences.addAll(_differenceLines('Tag', plan.tags));
+    final differences = <Widget>[
+      ..._differenceLines('Entry', plan.entries),
+      ..._differenceLines('Category', plan.categories),
+      ..._differenceLines('Tag', plan.tags),
+    ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -231,7 +214,7 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
         const SizedBox(height: 12),
         FilledButton(
           key: const Key('transfer-restore-continue'),
-          onPressed: () {},
+          onPressed: () => widget.transfer.continueFromReview(),
           child: const Text('Continue…'),
         ),
         const SizedBox(height: 8),
@@ -291,13 +274,140 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
         const SizedBox(height: 12),
         FilledButton(
           key: const Key('transfer-import-continue'),
-          onPressed: () {},
+          onPressed: () => widget.transfer.continueFromReview(),
           child: const Text('Continue…'),
         ),
         const SizedBox(height: 8),
         TextButton(
           onPressed: () => widget.transfer.cancel(),
           child: const Text('Cancel'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBackupRequired(BuildContext context) {
+    final state = _state as LibraryTransferBackupRequired;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Back up the current library',
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        const SizedBox(height: 12),
+        Text(
+          'Before replacing, the current library is saved outside the'
+          ' application as "${state.backupName}". You will re-open this'
+          ' file to verify the copy before anything is applied.',
+        ),
+        const SizedBox(height: 16),
+        FilledButton(
+          key: const Key('transfer-backup-save'),
+          onPressed: () => widget.transfer.createBackupCopy(),
+          child: const Text('Save backup copy…'),
+        ),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: () => widget.transfer.cancel(),
+          child: const Text('Cancel'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBackupSaved(BuildContext context) {
+    final state = _state as LibraryTransferBackupSaved;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Backup saved', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 12),
+        Text(
+          'The copy "${state.backupName}" is saved.'
+          ' Re-open it to prove the backup reads back exactly.',
+        ),
+        const SizedBox(height: 16),
+        FilledButton(
+          key: const Key('transfer-backup-verify'),
+          onPressed: () => widget.transfer.verifyBackupCopy(),
+          child: const Text('Verify by re-opening…'),
+        ),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: () => widget.transfer.cancel(),
+          child: const Text('Cancel'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBackupVerified(BuildContext context) {
+    final state = _state as LibraryTransferBackupVerified;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Ready to apply', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 12),
+        Text(
+          state.backupName == null
+              ? 'The current library is empty, so no backup copy is required.'
+              : 'The copy "${state.backupName}" was re-read and matches the'
+                    ' reviewed state exactly.',
+        ),
+        const SizedBox(height: 16),
+        FilledButton(
+          key: const Key('transfer-apply'),
+          onPressed: () => widget.transfer.apply(),
+          child: const Text('Apply'),
+        ),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: () => widget.transfer.cancel(),
+          child: const Text('Cancel'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRestoreDone(LibraryTransferRestoreDone state) {
+    return Column(
+      key: const Key('transfer-restore-done'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Library restored', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 12),
+        Text(
+          'Changed entries: ${state.entriesChanged}, categories:'
+          ' ${state.categoriesChanged}, tags: ${state.tagsChanged}.',
+        ),
+        Text('The backup copy is kept as "${state.backupName}".'),
+        const SizedBox(height: 16),
+        FilledButton(
+          onPressed: () => widget.transfer.cancel(),
+          child: const Text('Done'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildImportDone(LibraryTransferImportDone state) {
+    final added = state.outcomeCounts[ImportRowOutcome.selected] ?? 0;
+    return Column(
+      key: const Key('transfer-import-done'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Import finished', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 12),
+        Text(
+          'Added: $added, Skipped:'
+          ' ${state.outcomeCounts.values.fold<int>(0, (sum, count) => sum + count) - added},'
+          ' Warnings: ${state.warningRowCount}.',
+        ),
+        const SizedBox(height: 16),
+        FilledButton(
+          onPressed: () => widget.transfer.cancel(),
+          child: const Text('Done'),
         ),
       ],
     );
@@ -319,6 +429,35 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
         TextButton(
           onPressed: () => widget.transfer.cancel(),
           child: const Text('Back'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFailed(BuildContext context) {
+    final state = _state as LibraryTransferFailed;
+    final hasReview = state.libraryFailure != null;
+    return Column(
+      key: const Key('transfer-failed'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Transfer failed', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 12),
+        Text(
+          'The transfer operation could not be completed.'
+          ' Nothing was partially applied.',
+        ),
+        const SizedBox(height: 16),
+        if (hasReview)
+          FilledButton(
+            key: const Key('transfer-back-to-review'),
+            onPressed: () => widget.transfer.resumeReview(),
+            child: const Text('Back to review'),
+          ),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: () => widget.transfer.cancel(),
+          child: const Text('Close'),
         ),
       ],
     );
