@@ -51,6 +51,11 @@ void main() {
     expect(await send(), isA<DocumentExportCancelled>());
   });
 
+  test('parses unavailable outcome from the native side', () async {
+    responder = (call) async => {'outcome': 'unavailable'};
+
+    expect(await send(), isA<DocumentExportUnavailable>());
+  });
   test('maps every typed channel outcome', () async {
     final outcomes = <String, DocumentFileFailureCode>{
       'existingFile': DocumentFileFailureCode.existingFile,

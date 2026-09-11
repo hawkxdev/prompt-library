@@ -66,6 +66,7 @@ final class MethodChannelDocumentExport {
     return switch (reply['outcome']) {
       'saved' when path is String => DocumentSaved(path: path),
       'cancelled' => const DocumentExportCancelled(),
+      'unavailable' => const DocumentExportUnavailable(),
       'existingFile' => const DocumentExportFailure(
         code: DocumentFileFailureCode.existingFile,
       ),
