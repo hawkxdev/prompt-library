@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:prompt_library/src/platform/macos/mac_quick_panel_port.dart';
@@ -50,4 +51,18 @@ void main() {
     expect(afterDispose.kind, MacQuickPanelResultKind.unavailable);
     expect(afterDispose.diagnosticCode, isNull);
   }, skip: !Platform.isMacOS);
+
+  testWidgets(
+    'macOS production channel validates export arguments without presenting',
+    (tester) async {
+      const channel = MethodChannel('dev.hawkx.promptlibrary/document_export');
+      final reply = await channel.invokeMethod<Map<Object?, Object?>>(
+        'exportDocument',
+        {'name': 'library.json', 'kind': 'yaml', 'bytes': Uint8List(0)},
+      );
+
+      expect(reply?['outcome'], 'invalidArguments');
+    },
+    skip: !Platform.isMacOS,
+  );
 }
