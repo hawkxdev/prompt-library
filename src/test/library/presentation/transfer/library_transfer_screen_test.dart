@@ -1,0 +1,138 @@
+/// Transfer screen widget tests.
+library;
+
+import 'dart:typed_data';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:prompt_library/src/library/models/library_snapshot.dart';
+import 'package:prompt_library/src/library/presentation/library_controller.dart';
+import 'package:prompt_library/src/library/presentation/library_document_files.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_screen.dart';
+import 'package:prompt_library/src/library/transfer/library_document.dart';
+import 'package:prompt_library/src/library/transfer/library_json_codec.dart';
+
+import '../../../support/library_test_support.dart';
+
+void main() {
+  late TestLibraryRepository repository;
+  late LibraryController library;
+  late TestDocumentFiles files;
+  late LibraryTransferController transfer;
+
+  Future<void> pumpScreen(WidgetTester tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: LibraryTransferScreen(transfer: transfer)),
+      ),
+    );
+    await tester.pump();
+  }
+
+  setUp(() {
+    repository = TestLibraryRepository();
+    library = LibraryController(repository: repository);
+    files = TestDocumentFiles();
+    transfer = LibraryTransferController(
+      repository: repository,
+      library: library,
+      files: files,
+      now: () => DateTime.utc(2026, 9, 11, 14, 25),
+    );
+  });
+
+  tearDown(() async {
+    await transfer.dispose();
+    await library.dispose();
+    await repository.close();
+  });
+
+  testWidgets('export mode shows name, kind, and every excluded area', (
+    tester,
+  ) async {
+    await transfer.prepareExport(DocumentExportKind.json);
+    await pumpScreen(tester);
+
+    expect(find.text('prompt-library-2026-09-11.json'), findsOneWidget);
+    expect(find.text('JSON'), findsOneWidget);
+    expect(find.byKey(const Key('transfer-export-exclusions')), findsOneWidget);
+    expect(
+      find.textContaining('Search state'),
+      findsOneWidget,
+      reason: 'all five excluded areas are named',
+    );
+    expect(find.textContaining('Selection'), findsOneWidget);
+    expect(find.textContaining('Drafts'), findsOneWidget);
+    expect(find.textContaining('Global shortcut'), findsOneWidget);
+    expect(find.textContaining('Platform settings'), findsOneWidget);
+    expect(find.textContaining('library.JSON'), findsNothing);
+  });
+
+  testWidgets('restore review lists differences across collections', (
+    tester,
+  ) async {
+    repository.emit(LibrarySnapshot(entries: [testEntry('kept-1')]));
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    final document = LibraryDocument(
+      snapshot: LibrarySnapshot(
+        entries: [testEntry('kept-1'), testEntry('incoming-1')],
+      ),
+      exportedAt: DateTime.utc(2026, 9, 1),
+    );
+    files.pickResult = DocumentPicked(
+      fileName: 'library.json',
+      bytes: LibraryJsonCodec().encode(document),
+    );
+    await transfer.startImport();
+    await pumpScreen(tester);
+
+    expect(
+      find.byKey(const Key('transfer-restore-differences')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('added'), findsWidgets);
+    expect(find.textContaining('incoming-1'), findsOneWidget);
+    expect(find.textContaining('removed'), findsNothing);
+  });
+
+  testWidgets('Raycast review shows row outcomes and counters', (tester) async {
+    files.pickResult = DocumentPicked(
+      fileName: 'snippets.json',
+      bytes: _bytes('[{"name":"Alpha","text":"Body A"}]'),
+    );
+    await transfer.startImport();
+    await pumpScreen(tester);
+
+    expect(find.byKey(const Key('transfer-raycast-rows')), findsOneWidget);
+    expect(find.textContaining('Alpha'), findsOneWidget);
+    expect(find.textContaining('Added: 1'), findsOneWidget);
+    expect(find.textContaining('Skipped: 0'), findsOneWidget);
+  });
+
+  testWidgets('unsupported file explains the reason without content', (
+    tester,
+  ) async {
+    files.pickResult = DocumentPicked(
+      fileName: 'broken.json',
+      bytes: _bytes('{"format":"dev.hawkx.promptlibrary.library"}'),
+    );
+    await transfer.startImport();
+    await pumpScreen(tester);
+
+    expect(find.byKey(const Key('transfer-unsupported')), findsOneWidget);
+    expect(find.textContaining('not a supported'), findsOneWidget);
+    expect(find.textContaining('dev.hawkx.promptlibrary'), findsNothing);
+  });
+
+  testWidgets('idle mode offers export and import actions', (tester) async {
+    await pumpScreen(tester);
+
+    expect(find.text('Export JSON'), findsOneWidget);
+    expect(find.text('Export Markdown'), findsOneWidget);
+    expect(find.text('Import from file…'), findsOneWidget);
+  });
+}
+
+/// Wraps source text into bytes.
+Uint8List _bytes(String source) => Uint8List.fromList(source.codeUnits);

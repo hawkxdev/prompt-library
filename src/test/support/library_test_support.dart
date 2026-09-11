@@ -3,6 +3,8 @@ library;
 
 import 'dart:async';
 
+import 'dart:typed_data';
+
 import 'package:prompt_library/src/library/data/library_repository.dart';
 import 'package:prompt_library/src/library/models/category.dart';
 import 'package:prompt_library/src/library/models/entry.dart';
@@ -11,6 +13,7 @@ import 'package:prompt_library/src/library/models/entry_update.dart';
 import 'package:prompt_library/src/library/models/library_failure.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/models/tag.dart';
+import 'package:prompt_library/src/library/presentation/library_document_files.dart';
 
 /// Controllable in-memory repository.
 final class TestLibraryRepository implements LibraryRepository {
@@ -399,4 +402,43 @@ Tag testTag(String id, String name) {
     normalizedName: name.toLowerCase(),
     createdAt: DateTime.utc(2026),
   );
+}
+
+/// Queueing fake of the document file boundary.
+final class TestDocumentFiles implements LibraryDocumentFiles {
+  /// Result returned by the next pick call.
+  DocumentPickResult? pickResult;
+
+  /// Result returned by the next export call.
+  DocumentExportResult? exportResult;
+
+  /// Kind recorded by the last export call.
+  DocumentExportKind? lastKind;
+
+  /// Blocks the next pick call until completed.
+  Completer<void>? pickGate;
+
+  /// Recorded boundary calls.
+  final List<String> calls = [];
+
+  @override
+  Future<DocumentPickResult> pickDocument() async {
+    calls.add('pickDocument');
+    final gate = pickGate;
+    if (gate != null) {
+      await gate.future;
+    }
+    return pickResult!;
+  }
+
+  @override
+  Future<DocumentExportResult> exportDocument({
+    required DocumentExportKind kind,
+    required String suggestedName,
+    required Uint8List bytes,
+  }) async {
+    calls.add('exportDocument:$suggestedName');
+    lastKind = kind;
+    return exportResult!;
+  }
 }

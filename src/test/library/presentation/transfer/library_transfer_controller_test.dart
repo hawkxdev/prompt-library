@@ -1,0 +1,357 @@
+/// Transfer controller tests.
+library;
+
+import 'dart:async';
+import 'dart:typed_data';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:prompt_library/src/library/models/library_snapshot.dart';
+import 'package:prompt_library/src/library/presentation/library_controller.dart';
+import 'package:prompt_library/src/library/presentation/library_document_files.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_state.dart';
+import 'package:prompt_library/src/library/transfer/library_document.dart';
+import 'package:prompt_library/src/library/transfer/library_json_codec.dart';
+import 'package:prompt_library/src/library/transfer/library_transfer_plan.dart';
+
+import '../../../support/library_test_support.dart';
+
+void main() {
+  late TestLibraryRepository repository;
+  late LibraryController library;
+  late TestDocumentFiles files;
+  late LibraryTransferController controller;
+
+  setUp(() {
+    repository = TestLibraryRepository();
+    library = LibraryController(repository: repository);
+    files = TestDocumentFiles();
+    controller = LibraryTransferController(
+      repository: repository,
+      library: library,
+      files: files,
+      now: () => DateTime.utc(2026, 9, 11, 14, 25),
+    );
+  });
+
+  tearDown(() async {
+    await controller.dispose();
+    await library.dispose();
+    await repository.close();
+  });
+
+  group('classification', () {
+    test('classifies a List root as a Raycast review', () async {
+      files.pickResult = DocumentPicked(
+        fileName: 'snippets.json',
+        bytes: _bytes('[{"name":"Alpha","text":"Body A"}]'),
+      );
+
+      await controller.startImport();
+
+      final state = controller.state;
+      expect(state, isA<LibraryTransferRaycastReview>());
+      final review = state as LibraryTransferRaycastReview;
+      expect(review.plan.rows, hasLength(1));
+      expect(review.plan.rows.single.outcome, ImportRowOutcome.selected);
+    });
+
+    test('classifies a Map root as a restore review', () async {
+      final document = LibraryDocument(
+        snapshot: LibrarySnapshot(
+          entries: [testEntry('incoming-1', title: 'Incoming', body: 'Body')],
+        ),
+        exportedAt: DateTime.utc(2026, 9, 1),
+      );
+      files.pickResult = DocumentPicked(
+        fileName: 'library.json',
+        bytes: LibraryJsonCodec().encode(document),
+      );
+
+      await controller.startImport();
+
+      final state = controller.state;
+      expect(state, isA<LibraryTransferRestoreReview>());
+      final review = state as LibraryTransferRestoreReview;
+      expect(review.plan.entries.single.kind, EntityChangeKind.added);
+    });
+
+    test('rejects a scalar root and broken JSON as unsupported', () async {
+      files.pickResult = DocumentPicked(
+        fileName: 'scalar.json',
+        bytes: _bytes('42'),
+      );
+      await controller.startImport();
+      expect(
+        controller.state,
+        isA<LibraryTransferUnsupportedFile>().having(
+          (state) => state.failure.code,
+          'code',
+          DocumentFailureCode.invalidShape,
+        ),
+      );
+
+      files.pickResult = DocumentPicked(
+        fileName: 'broken.json',
+        bytes: _bytes('{'),
+      );
+      await controller.startImport();
+      expect(
+        controller.state,
+        isA<LibraryTransferUnsupportedFile>().having(
+          (state) => state.failure.code,
+          'code',
+          DocumentFailureCode.invalidJson,
+        ),
+      );
+    });
+
+    test(
+      'rejects a damaged own document without Raycast diagnostics',
+      () async {
+        files.pickResult = DocumentPicked(
+          fileName: 'own.json',
+          bytes: _bytes('{"format":"dev.hawkx.promptlibrary.library"}'),
+        );
+
+        await controller.startImport();
+
+        expect(controller.state, isA<LibraryTransferUnsupportedFile>());
+        expect(controller.state, isNot(isA<LibraryTransferRaycastReview>()));
+      },
+    );
+  });
+
+  group('export preparation', () {
+    test('builds a default name with a lowercase extension', () async {
+      await controller.prepareExport(DocumentExportKind.json);
+
+      final state = controller.state as LibraryTransferExportReady;
+      expect(state.fileName, 'prompt-library-2026-09-11.json');
+      expect(state.fileName.contains(':'), isFalse);
+      expect(state.savedPath, isNull);
+    });
+
+    test('builds a markdown name for the markdown kind', () async {
+      await controller.prepareExport(DocumentExportKind.markdown);
+
+      final state = controller.state as LibraryTransferExportReady;
+      expect(state.fileName, 'prompt-library-2026-09-11.md');
+    });
+
+    test('truncates live clocks to whole UTC seconds', () async {
+      final fractional = LibraryTransferController(
+        repository: repository,
+        library: library,
+        files: files,
+        now: () => DateTime.utc(2026, 9, 11, 14, 25, 22, 500, 900),
+      );
+      addTearDown(() => unawaited(fractional.dispose()));
+
+      await fractional.prepareExport(DocumentExportKind.json);
+
+      expect(fractional.state, isA<LibraryTransferExportReady>());
+    });
+
+    test('rejects an oversized snapshot before any file is created', () async {
+      final oversized = LibraryTransferController(
+        repository: repository,
+        library: library,
+        files: files,
+        limits: DocumentLimits(maxBytes: 64),
+      );
+      addTearDown(() => unawaited(oversized.dispose()));
+      repository.emit(
+        LibrarySnapshot(entries: List.generate(50, (i) => testEntry('e$i'))),
+      );
+      await pumpEventQueue();
+
+      await oversized.prepareExport(DocumentExportKind.json);
+
+      expect(
+        oversized.state,
+        isA<LibraryTransferFailed>().having(
+          (state) => state.failure?.code,
+          'failure.code',
+          DocumentFailureCode.limitExceeded,
+        ),
+      );
+      expect(files.calls, isEmpty);
+    });
+
+    test(
+      'sends prepared bytes through the boundary and records the path',
+      () async {
+        await controller.prepareExport(DocumentExportKind.json);
+        files.exportResult = DocumentSaved(path: '/tmp/saved.json');
+
+        await controller.exportPrepared();
+
+        expect(files.calls.single.startsWith('exportDocument:'), isTrue);
+        expect(files.lastKind, DocumentExportKind.json);
+        final state = controller.state as LibraryTransferExportReady;
+        expect(state.savedPath, '/tmp/saved.json');
+      },
+    );
+
+    test(
+      'keeps the prepared export when the save dialog is cancelled',
+      () async {
+        await controller.prepareExport(DocumentExportKind.json);
+        files.exportResult = const DocumentExportCancelled();
+
+        await controller.exportPrepared();
+
+        final state = controller.state as LibraryTransferExportReady;
+        expect(state.savedPath, isNull);
+      },
+    );
+
+    test('moves to the failed state when the boundary fails', () async {
+      await controller.prepareExport(DocumentExportKind.json);
+      files.exportResult = const DocumentExportFailure(
+        code: DocumentFileFailureCode.writeFailed,
+      );
+
+      await controller.exportPrepared();
+
+      expect(
+        controller.state,
+        isA<LibraryTransferFailed>().having(
+          (state) => state.code,
+          'code',
+          DocumentFileFailureCode.writeFailed,
+        ),
+      );
+    });
+  });
+
+  group('selection and staleness', () {
+    test('rebuilds the plan with the new selection', () async {
+      await _startRaycastImport(repository, files, controller);
+
+      controller.updateSelection(RaycastSelection(excludedIndices: {1}));
+
+      final review = controller.state as LibraryTransferRaycastReview;
+      expect(review.plan.rows.last.outcome, ImportRowOutcome.userSkipped);
+    });
+
+    test('goes stale when the library changes after the review', () async {
+      await _startRaycastImport(repository, files, controller);
+      expect(controller.state, isA<LibraryTransferRaycastReview>());
+      repository.emit(
+        LibrarySnapshot(
+          entries: [testEntry('entry-1', lastCopiedAt: DateTime.utc(2026))],
+        ),
+      );
+      await pumpEventQueue();
+
+      expect(controller.state, isA<LibraryTransferStale>());
+    });
+
+    test('cancel returns to idle and forgets the stale operation', () async {
+      await _startRaycastImport(repository, files, controller);
+      repository.emit(const LibrarySnapshot.empty());
+      await pumpEventQueue();
+      expect(controller.state, isA<LibraryTransferStale>());
+
+      controller.cancel();
+
+      expect(controller.state, const LibraryTransferIdle());
+    });
+  });
+
+  group('lifecycle', () {
+    test('ignores a second import while one is in flight', () async {
+      final gate = Completer<void>();
+      files.pickGate = gate;
+      files.pickResult = DocumentPicked(
+        fileName: 'snippets.json',
+        bytes: _bytes('[{"name":"A","text":"B"}]'),
+      );
+
+      final first = controller.startImport();
+      await controller.startImport();
+      gate.complete();
+      await first;
+      await pumpEventQueue();
+
+      expect(files.calls, ['pickDocument']);
+      expect(controller.state, isA<LibraryTransferRaycastReview>());
+    });
+
+    test('stays idle when the pick is cancelled', () async {
+      files.pickResult = const DocumentPickCancelled();
+
+      await controller.startImport();
+
+      expect(controller.state, const LibraryTransferIdle());
+    });
+
+    test('reports the boundary failure and allows a retry', () async {
+      files.pickResult = const DocumentPickFailure(
+        code: DocumentFileFailureCode.readFailed,
+      );
+
+      await controller.startImport();
+      expect(
+        controller.state,
+        isA<LibraryTransferFailed>().having(
+          (state) => state.code,
+          'code',
+          DocumentFileFailureCode.readFailed,
+        ),
+      );
+
+      files.pickResult = DocumentPicked(
+        fileName: 'snippets.json',
+        bytes: _bytes('[{"name":"A","text":"B"}]'),
+      );
+      await controller.startImport();
+      expect(controller.state, isA<LibraryTransferRaycastReview>());
+    });
+
+    test('disposes idempotently and rejects later commands', () async {
+      await controller.dispose();
+      await controller.dispose();
+
+      expect(() => controller.startImport(), throwsStateError);
+      expect(
+        () => controller.updateSelection(RaycastSelection()),
+        throwsStateError,
+      );
+    });
+
+    test('suppresses late snapshot events after disposal', () async {
+      await _startRaycastImport(repository, files, controller);
+      await controller.dispose();
+
+      repository.emit(const LibrarySnapshot.empty());
+      await pumpEventQueue();
+
+      expect(controller.state, isA<LibraryTransferRaycastReview>());
+    });
+  });
+}
+
+/// Starts an import over a two-row Raycast file with one seeded entry.
+Future<RaycastImportPlan> _startRaycastImport(
+  TestLibraryRepository repository,
+  TestDocumentFiles files,
+  LibraryTransferController controller,
+) async {
+  repository.emit(LibrarySnapshot(entries: [testEntry('entry-1')]));
+  await pumpEventQueue();
+  files.pickResult = DocumentPicked(
+    fileName: 'snippets.json',
+    bytes: _bytes(
+      '[{"name":"Alpha","text":"Body A"},'
+      '{"name":"Alpha","text":"Body A"}]',
+    ),
+  );
+  await controller.startImport();
+  return (controller.state as LibraryTransferRaycastReview).plan;
+}
+
+/// Wraps source text into bytes.
+Uint8List _bytes(String source) => Uint8List.fromList(source.codeUnits);
