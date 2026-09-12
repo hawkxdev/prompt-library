@@ -13,6 +13,7 @@ import 'package:prompt_library/src/library/presentation/transfer/library_transfe
 import 'package:prompt_library/src/library/presentation/transfer/library_transfer_screen.dart';
 import 'package:prompt_library/src/library/transfer/library_document.dart';
 import 'package:prompt_library/src/library/transfer/library_json_codec.dart';
+import 'package:prompt_library/src/library/transfer/library_transfer_plan.dart';
 
 import '../../../support/library_test_support.dart';
 
@@ -52,7 +53,9 @@ void main() {
   testWidgets('export mode shows name, kind, and every excluded area', (
     tester,
   ) async {
-    await transfer.prepareExport(DocumentExportKind.json);
+    await tester.runAsync(
+      () => transfer.prepareExport(DocumentExportKind.json),
+    );
     await pumpScreen(tester);
 
     expect(find.text('prompt-library-2026-09-11.json'), findsOneWidget);
@@ -74,7 +77,7 @@ void main() {
     tester,
   ) async {
     repository.emit(LibrarySnapshot(entries: [testEntry('kept-1')]));
-    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.runAsync(() => transfer.settled);
     final document = LibraryDocument(
       snapshot: LibrarySnapshot(
         entries: [testEntry('kept-1'), testEntry('incoming-1')],
@@ -85,7 +88,7 @@ void main() {
       fileName: 'library.json',
       bytes: LibraryJsonCodec().encode(document),
     );
-    await transfer.startImport();
+    await tester.runAsync(() => transfer.startImport());
     await pumpScreen(tester);
 
     expect(
@@ -102,12 +105,12 @@ void main() {
       fileName: 'snippets.json',
       bytes: _bytes('[{"name":"Alpha","text":"Body A"}]'),
     );
-    await transfer.startImport();
+    await tester.runAsync(() => transfer.startImport());
     await pumpScreen(tester);
 
     expect(find.byKey(const Key('transfer-raycast-rows')), findsOneWidget);
     expect(find.textContaining('Alpha'), findsOneWidget);
-    expect(find.textContaining('Added: 1'), findsOneWidget);
+    expect(find.textContaining('Will add: 1'), findsOneWidget);
     expect(find.textContaining('Skipped: 0'), findsOneWidget);
   });
 
@@ -118,7 +121,7 @@ void main() {
       fileName: 'broken.json',
       bytes: _bytes('{"format":"dev.hawkx.promptlibrary.library"}'),
     );
-    await transfer.startImport();
+    await tester.runAsync(() => transfer.startImport());
     await pumpScreen(tester);
 
     expect(find.byKey(const Key('transfer-unsupported')), findsOneWidget);
@@ -134,12 +137,136 @@ void main() {
     expect(find.text('Import from file…'), findsOneWidget);
   });
 
+  testWidgets('restore review exposes exact old and new field values', (
+    tester,
+  ) async {
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('kept', body: 'old body')]),
+    );
+    files.pickResult = DocumentPicked(
+      fileName: 'replacement.json',
+      bytes: LibraryJsonCodec().encode(
+        LibraryDocument(
+          snapshot: LibrarySnapshot(
+            entries: [testEntry('kept', body: 'new body')],
+          ),
+          exportedAt: DateTime.utc(2026),
+        ),
+      ),
+    );
+    await tester.runAsync(() => transfer.startImport());
+    await pumpScreen(tester);
+    await tester.runAsync(() async {
+      await tester.tap(find.textContaining('modified: kept'));
+      await transfer.settled;
+    });
+    await tester.runAsync(() => transfer.settled);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('old body'), findsOneWidget);
+    expect(find.textContaining('new body'), findsOneWidget);
+  });
+
+  testWidgets(
+    'Raycast conflict and unknown fields can be accepted explicitly',
+    (tester) async {
+      files.pickResult = DocumentPicked(
+        fileName: 'snippets.json',
+        bytes: _bytes(
+          '[{"name":"Alpha","text":"one"},'
+          '{"name":" Alpha ","text":"two {clipboard}","folder":"work"}]',
+        ),
+      );
+      await tester.runAsync(() => transfer.startImport());
+      await pumpScreen(tester);
+
+      expect(find.textContaining('folder'), findsOneWidget);
+      expect(find.textContaining('Literal'), findsWidgets);
+      await tester.ensureVisible(find.byKey(const Key('transfer-unknown-1')));
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const Key('transfer-unknown-1')));
+        await transfer.settled;
+      });
+      await tester.runAsync(() => transfer.settled);
+      await tester.pumpAndSettle();
+      expect(
+        (transfer.state as LibraryTransferRaycastReview).plan.rows.last.outcome,
+        ImportRowOutcome.conflict,
+      );
+      await tester.ensureVisible(find.byKey(const Key('transfer-add-new-1')));
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const Key('transfer-add-new-1')));
+        await transfer.settled;
+      });
+      await tester.runAsync(() => transfer.settled);
+      await tester.pumpAndSettle();
+      expect(
+        (transfer.state as LibraryTransferRaycastReview).plan.predictedAdded,
+        2,
+      );
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, 1000));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Will add: 2'), findsOneWidget);
+    },
+  );
+
+  testWidgets('Raycast choices do not survive into a different file', (
+    tester,
+  ) async {
+    files.pickResult = DocumentPicked(
+      fileName: 'first.json',
+      bytes: _bytes('[{"name":"A","text":"a"},{"name":"B","text":"b"}]'),
+    );
+    await tester.runAsync(() => transfer.startImport());
+    await pumpScreen(tester);
+    await tester.runAsync(() async {
+      await tester.tap(find.byKey(const Key('transfer-exclude-1')));
+      await transfer.settled;
+    });
+    await tester.runAsync(() => transfer.settled);
+    await tester.pumpAndSettle();
+    transfer.cancel();
+    await tester.pump();
+    files.pickResult = DocumentPicked(
+      fileName: 'second.json',
+      bytes: _bytes('[{"name":"Only","text":"one"}]'),
+    );
+    await tester.runAsync(() => transfer.startImport());
+    await tester.pump();
+    await tester.runAsync(() async {
+      await tester.tap(find.byKey(const Key('transfer-exclude-0')));
+      await transfer.settled;
+    });
+    await tester.runAsync(() => transfer.settled);
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(
+      (transfer.state as LibraryTransferRaycastReview).plan.predictedAdded,
+      0,
+    );
+  });
+
+  testWidgets('file failure explains the recovery action', (tester) async {
+    await tester.runAsync(
+      () => transfer.prepareExport(DocumentExportKind.json),
+    );
+    files.exportResult = const DocumentExportFailure(
+      code: DocumentFileFailureCode.existingFile,
+    );
+    await tester.runAsync(() => transfer.exportPrepared());
+    await pumpScreen(tester);
+
+    expect(find.textContaining('already exists'), findsOneWidget);
+    expect(find.textContaining('different name'), findsOneWidget);
+  });
+
   group('backup and application flow', () {
     testWidgets('drives restore from review to the done summary', (
       tester,
     ) async {
       repository.emit(LibrarySnapshot(entries: [testEntry('kept-1')]));
-      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.runAsync(() => transfer.settled);
       final document = LibraryDocument(
         snapshot: LibrarySnapshot(
           entries: [testEntry('kept-1'), testEntry('incoming-1')],
@@ -150,15 +277,23 @@ void main() {
         fileName: 'library.json',
         bytes: LibraryJsonCodec().encode(document),
       );
-      await transfer.startImport();
+      await tester.runAsync(() => transfer.startImport());
       await pumpScreen(tester);
 
-      await tester.tap(find.byKey(const Key('transfer-restore-continue')));
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const Key('transfer-restore-continue')));
+        await transfer.settled;
+      });
+      await tester.runAsync(() => transfer.settled);
       await tester.pump();
       expect(transfer.state, isA<LibraryTransferBackupRequired>());
       files.exportResult = DocumentSaved(path: '/tmp/backup.json');
-      await tester.tap(find.byKey(const Key('transfer-backup-save')));
-      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const Key('transfer-backup-save')));
+        await transfer.settled;
+      });
+      await tester.runAsync(() => transfer.settled);
+      await tester.runAsync(() => transfer.settled);
       await tester.pump();
       final currentSnapshot = await repository.getSnapshot();
       files.pickResult = DocumentPicked(
@@ -170,25 +305,30 @@ void main() {
           ),
         ),
       );
-      await tester.tap(find.byKey(const Key('transfer-backup-verify')));
-      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const Key('transfer-backup-verify')));
+        await transfer.settled;
+      });
+      await tester.runAsync(() => transfer.settled);
+      await tester.runAsync(() => transfer.settled);
       await tester.pump();
-      await tester.tap(find.byKey(const Key('transfer-apply')));
-      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const Key('transfer-apply')));
+        await transfer.settled;
+      });
+      await tester.runAsync(() => transfer.settled);
+      await tester.runAsync(() => transfer.settled);
       await tester.pump();
 
       expect(find.byKey(const Key('transfer-restore-done')), findsOneWidget);
-      expect(
-        find.textContaining('prompt-library-backup-2026-09-11'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('backup.json'), findsOneWidget);
     });
 
     testWidgets('returns to the review after a repository failure', (
       tester,
     ) async {
       repository.emit(LibrarySnapshot(entries: [testEntry('kept-1')]));
-      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.runAsync(() => transfer.settled);
       final document = LibraryDocument(
         snapshot: LibrarySnapshot(
           entries: [testEntry('kept-1'), testEntry('incoming-1')],
@@ -199,13 +339,21 @@ void main() {
         fileName: 'library.json',
         bytes: LibraryJsonCodec().encode(document),
       );
-      await transfer.startImport();
+      await tester.runAsync(() => transfer.startImport());
       await pumpScreen(tester);
-      await tester.tap(find.byKey(const Key('transfer-restore-continue')));
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const Key('transfer-restore-continue')));
+        await transfer.settled;
+      });
+      await tester.runAsync(() => transfer.settled);
       await tester.pump();
       files.exportResult = DocumentSaved(path: '/tmp/backup.json');
-      await tester.tap(find.byKey(const Key('transfer-backup-save')));
-      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const Key('transfer-backup-save')));
+        await transfer.settled;
+      });
+      await tester.runAsync(() => transfer.settled);
+      await tester.runAsync(() => transfer.settled);
       await tester.pump();
       final currentSnapshot = await repository.getSnapshot();
       files.pickResult = DocumentPicked(
@@ -217,18 +365,30 @@ void main() {
           ),
         ),
       );
-      await tester.tap(find.byKey(const Key('transfer-backup-verify')));
-      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const Key('transfer-backup-verify')));
+        await transfer.settled;
+      });
+      await tester.runAsync(() => transfer.settled);
+      await tester.runAsync(() => transfer.settled);
       await tester.pump();
       repository.nextFailure = LibraryFailure.databaseFailure(
         code: LibraryDatabaseFailureCode.transactionFailed,
       );
-      await tester.tap(find.byKey(const Key('transfer-apply')));
-      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const Key('transfer-apply')));
+        await transfer.settled;
+      });
+      await tester.runAsync(() => transfer.settled);
+      await tester.runAsync(() => transfer.settled);
       await tester.pump();
 
       expect(find.byKey(const Key('transfer-failed')), findsOneWidget);
-      await tester.tap(find.byKey(const Key('transfer-back-to-review')));
+      await tester.runAsync(() async {
+        await tester.tap(find.byKey(const Key('transfer-back-to-review')));
+        await transfer.settled;
+      });
+      await tester.runAsync(() => transfer.settled);
       await tester.pump();
 
       expect(
@@ -239,29 +399,52 @@ void main() {
   });
 
   group('operational coverage', () {
+    testWidgets('review actions remain reachable in short large text views', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(320, 300);
+      tester.view.devicePixelRatio = 1;
+      tester.platformDispatcher.textScaleFactorTestValue = 3.1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.platformDispatcher.clearAllTestValues);
+      files.pickResult = DocumentPicked(
+        fileName: 'short.json',
+        bytes: _bytes('[{"name":"Alpha","text":"body"}]'),
+      );
+      await tester.runAsync(() => transfer.startImport());
+      await pumpScreen(tester);
+      expect(tester.takeException(), isNull);
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('transfer-import-continue')),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('renders and scrolls a two-thousand-entry restore review', (
       tester,
     ) async {
       final kept = List.generate(2000, (i) => testEntry('kept-$i'));
       repository.emit(LibrarySnapshot(entries: kept));
-      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.runAsync(() => transfer.settled);
       final document = LibraryDocument(
-        snapshot: LibrarySnapshot(
-          entries: [...kept, testEntry('incoming-2000')],
-        ),
+        snapshot: LibrarySnapshot(entries: [testEntry('zz-incoming-2000')]),
         exportedAt: DateTime.utc(2026, 9, 1),
       );
       files.pickResult = DocumentPicked(
         fileName: 'library.json',
         bytes: LibraryJsonCodec().encode(document),
       );
-      await transfer.startImport();
+      await tester.runAsync(() => transfer.startImport());
       await pumpScreen(tester);
 
       expect(tester.takeException(), isNull);
       await tester.scrollUntilVisible(
-        find.textContaining('incoming-2000'),
-        600,
+        find.textContaining('zz-incoming-2000'),
+        5000,
+        maxScrolls: 100,
         scrollable: find
             .descendant(
               of: find.byKey(const Key('transfer-restore-differences')),
@@ -270,14 +453,16 @@ void main() {
             .first,
       );
       expect(tester.takeException(), isNull);
-      expect(find.textContaining('incoming-2000'), findsOneWidget);
+      expect(find.textContaining('zz-incoming-2000'), findsOneWidget);
     });
 
     testWidgets('survives large text scales without layout exceptions', (
       tester,
     ) async {
       for (final scale in [2.0, 3.1]) {
-        await transfer.prepareExport(DocumentExportKind.json);
+        await tester.runAsync(
+          () => transfer.prepareExport(DocumentExportKind.json),
+        );
         tester.platformDispatcher.textScaleFactorTestValue = scale;
         addTearDown(tester.platformDispatcher.clearAllTestValues);
         await pumpScreen(tester);
@@ -295,7 +480,9 @@ void main() {
       tester,
     ) async {
       // Tab from a fresh screen reaches Save, and Enter activates it.
-      await transfer.prepareExport(DocumentExportKind.json);
+      await tester.runAsync(
+        () => transfer.prepareExport(DocumentExportKind.json),
+      );
       files.exportResult = DocumentSaved(path: '/tmp/saved.json');
       await pumpScreen(tester);
       var focused = focusedOn(const Key('transfer-export-save'));
@@ -305,8 +492,11 @@ void main() {
         focused = focusedOn(const Key('transfer-export-save'));
       }
       expect(focused, isTrue, reason: 'Tab reaches the save action');
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.runAsync(() async {
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await transfer.settled;
+      });
+      await tester.runAsync(() => transfer.settled);
       await tester.pump();
       expect(find.textContaining('Saved. Path:'), findsOneWidget);
     });
@@ -314,7 +504,9 @@ void main() {
     testWidgets('reaches cancel by traversal and returns to idle', (
       tester,
     ) async {
-      await transfer.prepareExport(DocumentExportKind.json);
+      await tester.runAsync(
+        () => transfer.prepareExport(DocumentExportKind.json),
+      );
       await pumpScreen(tester);
       var focused = focusedOn(const Key('transfer-export-cancel'));
       for (var i = 0; i < 12 && !focused; i++) {
@@ -323,7 +515,10 @@ void main() {
         focused = focusedOn(const Key('transfer-export-cancel'));
       }
       expect(focused, isTrue, reason: 'Tab order reaches the cancel action');
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.runAsync(() async {
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await transfer.settled;
+      });
       await tester.pump();
       expect(find.byKey(const Key('transfer-idle')), findsOneWidget);
     });
@@ -338,7 +533,9 @@ void main() {
       expect(find.semantics.byLabel('Import from file…'), findsOneWidget);
       handle.dispose();
 
-      await transfer.prepareExport(DocumentExportKind.json);
+      await tester.runAsync(
+        () => transfer.prepareExport(DocumentExportKind.json),
+      );
       await pumpScreen(tester);
       final stepHandle = tester.ensureSemantics();
       expect(find.semantics.byLabel('Save…'), findsOneWidget);

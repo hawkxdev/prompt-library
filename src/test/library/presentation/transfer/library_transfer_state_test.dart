@@ -40,7 +40,7 @@ void main() {
 
   group('LibraryTransferImportDone', () {
     test('compares outcome maps by content and warns independently', () {
-      const done = LibraryTransferImportDone(
+      final done = LibraryTransferImportDone(
         outcomeCounts: {
           ImportRowOutcome.selected: 2,
           ImportRowOutcome.duplicate: 1,
@@ -111,10 +111,13 @@ void main() {
 
   group('sealed phase hierarchy', () {
     test('freezes import outcome maps against mutation', () {
-      const done = LibraryTransferImportDone(
-        outcomeCounts: {ImportRowOutcome.selected: 1},
+      final source = {ImportRowOutcome.selected: 1};
+      final done = LibraryTransferImportDone(
+        outcomeCounts: source,
         warningRowCount: 0,
       );
+      source[ImportRowOutcome.selected] = 4;
+      expect(done.outcomeCounts[ImportRowOutcome.selected], 1);
 
       expect(
         () => done.outcomeCounts[ImportRowOutcome.selected] = 5,

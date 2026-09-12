@@ -31,6 +31,9 @@ final class TestLibraryRepository implements LibraryRepository {
   /// Next typed mutation failure.
   LibraryFailure? nextFailure;
 
+  /// Next typed snapshot read failure.
+  LibraryFailure? nextReadFailure;
+
   /// Blocks the next repository mutation until completed.
   Completer<void>? nextMutationGate;
 
@@ -78,7 +81,12 @@ final class TestLibraryRepository implements LibraryRepository {
   Stream<LibrarySnapshot> watchSnapshot() => _snapshots.stream;
 
   @override
-  Future<LibrarySnapshot> getSnapshot() async => _snapshot;
+  Future<LibrarySnapshot> getSnapshot() async {
+    final failure = nextReadFailure;
+    nextReadFailure = null;
+    if (failure != null) throw failure;
+    return _snapshot;
+  }
 
   @override
   Future<Entry> createEntry(EntryInput input) async {

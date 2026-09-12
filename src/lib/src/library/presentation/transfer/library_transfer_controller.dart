@@ -2,7 +2,7 @@
 library;
 
 import 'dart:async';
-import 'dart:convert';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import '../../data/library_repository.dart';
@@ -31,12 +31,10 @@ final class LibraryTransferController {
     DateTime Function()? now,
     DocumentLimits? limits,
   }) : _now = now ?? DateTime.now,
-       _codec = LibraryJsonCodec(limits: limits),
-       _markdown = LibraryMarkdownExport(limits: limits),
-       _decoder = RaycastSnippetDecoder(limits: limits) {
+       _limits = limits ?? DocumentLimits() {
     _snapshotSubscription = _repository.watchSnapshot().listen(
       _handleSnapshot,
-      onError: (Object _) {},
+      onError: _handleSnapshotError,
     );
   }
 
@@ -44,9 +42,7 @@ final class LibraryTransferController {
   final LibraryController _library;
   final LibraryDocumentFiles _files;
   final DateTime Function() _now;
-  final LibraryJsonCodec _codec;
-  final LibraryMarkdownExport _markdown;
-  final RaycastSnippetDecoder _decoder;
+  final DocumentLimits _limits;
 
   final StreamController<LibraryTransferState> _statesController =
       StreamController<LibraryTransferState>.broadcast();
@@ -63,12 +59,18 @@ final class LibraryTransferController {
   LibrarySnapshot? _pendingRestore;
   RaycastImportPlan? _pendingRaycast;
   bool _maintenanceActive = false;
+  bool _staleDuringOperation = false;
+  LibraryFailure? _snapshotFailure;
+  Completer<void>? _operationDone;
 
   /// Returns the current operation state.
   LibraryTransferState get state => _state;
 
   /// Publishes future operation states.
   Stream<LibraryTransferState> get states => _statesController.stream;
+
+  /// Completes when the admitted operation releases its resources.
+  Future<void> get settled => _operationDone?.future ?? Future<void>.value();
 
   /// Prepares export bytes for [kind] with a default file name.
   Future<void> prepareExport(DocumentExportKind kind) {
@@ -80,10 +82,8 @@ final class LibraryTransferController {
           snapshot: snapshot,
           exportedAt: _secondsNow(),
         );
-        final bytes = switch (kind) {
-          DocumentExportKind.json => _codec.encode(document),
-          DocumentExportKind.markdown => _markdown.encode(document),
-        };
+        final bytes = await _encodeDocument(document, kind, _limits);
+        if (_isDisposed) return;
         _preparedBytes = bytes;
         _preparedKind = kind;
         _emit(
@@ -147,23 +147,22 @@ final class LibraryTransferController {
   }
 
   /// Rebuilds the Raycast plan with the new selection.
-  void updateSelection(RaycastSelection selection) {
+  Future<void> updateSelection(RaycastSelection selection) {
     _ensureActive();
-    final source = _raycastSource;
-    final expected = _expected;
-    if (_state is! LibraryTransferRaycastReview ||
-        source == null ||
-        expected == null) {
-      return;
-    }
-    final plan = RaycastImportPlan.build(
-      source,
-      expected,
-      selection: selection,
-    );
-    _review = LibraryTransferRaycastReview(plan: plan);
-    _pendingRaycast = plan;
-    _emit(_review!);
+    return _runOperation(() async {
+      final source = _raycastSource;
+      final expected = _expected;
+      if (_state is! LibraryTransferRaycastReview ||
+          source == null ||
+          expected == null) {
+        return;
+      }
+      final plan = await _planRaycast(source, expected, selection);
+      if (_isDisposed) return;
+      _review = LibraryTransferRaycastReview(plan: plan, selection: selection);
+      _pendingRaycast = plan;
+      _emit(_review!);
+    });
   }
 
   /// Moves a reviewed operation to the backup or confirm step.
@@ -177,7 +176,7 @@ final class LibraryTransferController {
           _pendingRestore = plan.incomingSnapshot;
           _pendingRaycast = null;
         case LibraryTransferRaycastReview(:final plan):
-          _review = LibraryTransferRaycastReview(plan: plan);
+          _review = _state;
           _pendingRaycast = plan;
           _pendingRestore = null;
         default:
@@ -200,9 +199,12 @@ final class LibraryTransferController {
       if (expected == null) return;
       final Uint8List bytes;
       try {
-        bytes = _codec.encode(
+        bytes = await _encodeDocument(
           LibraryDocument(snapshot: expected, exportedAt: _secondsNow()),
+          DocumentExportKind.json,
+          _limits,
         );
+        if (_isDisposed) return;
       } on DocumentFailure catch (failure) {
         _emit(LibraryTransferFailed(failure: failure));
         return;
@@ -217,7 +219,7 @@ final class LibraryTransferController {
         case final DocumentSaved saved:
           _emit(
             LibraryTransferBackupSaved(
-              backupName: state.backupName,
+              backupName: saved.path.split('/').last,
               savedPath: saved.path,
             ),
           );
@@ -245,7 +247,7 @@ final class LibraryTransferController {
         case final DocumentPickFailure failure:
           _emit(LibraryTransferFailed(code: failure.code));
         case final DocumentPicked picked:
-          _verifyCopyBytes(picked.bytes);
+          await _verifyCopyBytes(picked.bytes);
       }
     });
   }
@@ -292,9 +294,13 @@ final class LibraryTransferController {
   void resumeReview() {
     _ensureActive();
     if (_state is! LibraryTransferFailed) return;
-    if ((_state as LibraryTransferFailed).libraryFailure == null) return;
+    if (!canResumeReview) return;
     _returnToReview();
   }
+
+  /// Reports whether a retained preview can be revisited.
+  bool get canResumeReview =>
+      _state is LibraryTransferFailed && _expected != null && _review != null;
 
   /// Abandons the operation and returns to the idle state.
   void cancel() {
@@ -308,64 +314,29 @@ final class LibraryTransferController {
   Future<void> dispose() async {
     if (_isDisposed) return;
     _isDisposed = true;
-    if (_maintenanceActive) {
-      _library.endMaintenance();
-      _maintenanceActive = false;
-    }
     final subscription = _snapshotSubscription;
     _snapshotSubscription = null;
     await subscription?.cancel();
     await _statesController.close();
   }
 
+  /// Decodes and compares documents outside the presentation isolate.
   Future<void> _classify(Uint8List bytes) async {
-    final Object? root;
     try {
-      root = _codec.decodeValue(bytes);
+      final source = await _decodeDocument(bytes, _limits);
+      if (_isDisposed) return;
+      final expected = await _repository.getSnapshot();
+      if (_isDisposed) return;
+      _expected = expected;
+      final review = await _buildReview(source, expected);
+      if (_isDisposed) return;
+      _raycastSource = source is RaycastDocument ? source : null;
+      _review = review;
+      _emit(review);
     } on DocumentFailure catch (failure) {
+      _clearWorking();
       _emit(LibraryTransferUnsupportedFile(failure: failure));
-      return;
     }
-    if (root is List) {
-      final RaycastDocument document;
-      try {
-        document = _decoder.decode(bytes);
-      } on DocumentFailure catch (failure) {
-        _emit(LibraryTransferUnsupportedFile(failure: failure));
-        return;
-      }
-      final expected = await _repository.getSnapshot();
-      if (_isDisposed) return;
-      _expected = expected;
-      _raycastSource = document;
-      final plan = RaycastImportPlan.build(document, expected);
-      _review = LibraryTransferRaycastReview(plan: plan);
-      _pendingRaycast = plan;
-      _emit(_review!);
-      return;
-    }
-    if (root is Map) {
-      final LibraryDocument document;
-      try {
-        document = LibraryDocument.fromValue(root);
-      } on DocumentFailure catch (failure) {
-        _emit(LibraryTransferUnsupportedFile(failure: failure));
-        return;
-      }
-      final expected = await _repository.getSnapshot();
-      if (_isDisposed) return;
-      _expected = expected;
-      final plan = LibraryRestorePlan.compare(expected, document.snapshot);
-      _review = LibraryTransferRestoreReview(plan: plan);
-      _pendingRestore = document.snapshot;
-      _emit(_review!);
-      return;
-    }
-    _emit(
-      const LibraryTransferUnsupportedFile(
-        failure: DocumentFailure(DocumentFailureCode.invalidShape),
-      ),
-    );
   }
 
   Future<void> _applyRestore(
@@ -410,26 +381,28 @@ final class LibraryTransferController {
     _emit(done);
   }
 
-  void _verifyCopyBytes(Uint8List bytes) {
+  /// Compares the reopened copy outside the presentation isolate.
+  Future<void> _verifyCopyBytes(Uint8List bytes) async {
     final expected = _expected;
     if (expected == null) return;
     try {
-      final root = _codec.decodeValue(bytes);
-      if (root is! Map) {
-        throw const DocumentFailure(DocumentFailureCode.invalidShape);
-      }
-      final document = LibraryDocument.fromValue(root);
-      final incomingCanonical = jsonEncode(
-        librarySnapshotValue(document.snapshot),
-      );
-      final expectedCanonical = jsonEncode(librarySnapshotValue(expected));
-      if (incomingCanonical != expectedCanonical) {
-        _returnToReview();
+      final source = await _decodeDocument(bytes, _limits);
+      if (_isDisposed) return;
+      final matches =
+          source is LibraryDocument &&
+          await _snapshotsMatch(source.snapshot, expected);
+      if (_isDisposed) return;
+      if (!matches) {
+        _emit(
+          const LibraryTransferFailed(
+            code: DocumentFileFailureCode.verifyFailed,
+          ),
+        );
         return;
       }
       _emit(LibraryTransferBackupVerified(backupName: _currentBackupName()));
-    } on DocumentFailure {
-      _returnToReview();
+    } on DocumentFailure catch (failure) {
+      _emit(LibraryTransferFailed(failure: failure));
     }
   }
 
@@ -437,11 +410,30 @@ final class LibraryTransferController {
     // The application's own repository publications are not external moves;
     // the transactional expectedCurrent check inside the repository is the
     // staleness bound for the apply itself.
-    if (_isDisposed || _busy || _maintenanceActive) return;
+    if (_isDisposed || _maintenanceActive) return;
     final expected = _expected;
     if (expected == null || snapshot == expected) return;
+    if (_busy) {
+      _staleDuringOperation = true;
+      return;
+    }
     _clearWorking();
     _emit(const LibraryTransferStale());
+  }
+
+  /// Invalidates previews when storage observation fails.
+  void _handleSnapshotError(Object error, StackTrace stack) {
+    if (_isDisposed) return;
+    if (error is! LibraryFailure) {
+      Zone.current.handleUncaughtError(error, stack);
+      return;
+    }
+    if (_busy) {
+      _snapshotFailure = error;
+      return;
+    }
+    _clearWorking();
+    _emit(LibraryTransferFailed(libraryFailure: error));
   }
 
   void _clearWorking() {
@@ -465,10 +457,27 @@ final class LibraryTransferController {
     _ensureActive();
     if (_busy || _state is LibraryTransferApplying) return;
     _busy = true;
+    final done = Completer<void>();
+    _operationDone = done;
     try {
       await operation();
+    } on LibraryFailure catch (failure) {
+      _clearWorking();
+      _emit(LibraryTransferFailed(libraryFailure: failure));
     } finally {
       _busy = false;
+      final failure = _snapshotFailure;
+      _snapshotFailure = null;
+      if (failure != null) {
+        _clearWorking();
+        _emit(LibraryTransferFailed(libraryFailure: failure));
+      } else if (_staleDuringOperation) {
+        _clearWorking();
+        _emit(const LibraryTransferStale());
+      }
+      _staleDuringOperation = false;
+      done.complete();
+      _operationDone = null;
     }
   }
 
@@ -505,7 +514,7 @@ final class LibraryTransferController {
   }
 
   String _dateStamp() {
-    final moment = _now();
+    final moment = _now().toUtc();
     final month = moment.month.toString().padLeft(2, '0');
     final day = moment.day.toString().padLeft(2, '0');
     return '${moment.year}-$month-$day';
@@ -527,3 +536,58 @@ final class LibraryTransferController {
     );
   }
 }
+
+/// Encodes a bounded document in a worker isolate.
+Future<Uint8List> _encodeDocument(
+  LibraryDocument document,
+  DocumentExportKind kind,
+  DocumentLimits limits,
+) => Isolate.run(
+  () => switch (kind) {
+    DocumentExportKind.json => LibraryJsonCodec(
+      limits: limits,
+    ).encode(document),
+    DocumentExportKind.markdown => LibraryMarkdownExport(
+      limits: limits,
+    ).encode(document),
+  },
+);
+
+/// Decodes the source in a worker isolate.
+Future<Object> _decodeDocument(Uint8List bytes, DocumentLimits limits) =>
+    Isolate.run(() {
+      final root = LibraryJsonCodec(limits: limits).decodeValue(bytes);
+      if (root is Map) return LibraryDocument.fromValue(root);
+      if (root is List) {
+        return RaycastSnippetDecoder(limits: limits).decode(bytes);
+      }
+      throw const DocumentFailure(DocumentFailureCode.invalidShape);
+    });
+
+/// Builds a complete preview in a worker isolate.
+Future<LibraryTransferState> _buildReview(
+  Object source,
+  LibrarySnapshot expected,
+) => Isolate.run(() {
+  if (source is LibraryDocument) {
+    return LibraryTransferRestoreReview(
+      plan: LibraryRestorePlan.compare(expected, source.snapshot),
+    );
+  }
+  return LibraryTransferRaycastReview(
+    plan: RaycastImportPlan.build(source as RaycastDocument, expected),
+  );
+});
+
+/// Recalculates source choices in a worker isolate.
+Future<RaycastImportPlan> _planRaycast(
+  RaycastDocument source,
+  LibrarySnapshot expected,
+  RaycastSelection selection,
+) => Isolate.run(
+  () => RaycastImportPlan.build(source, expected, selection: selection),
+);
+
+/// Compares every snapshot field in a worker isolate.
+Future<bool> _snapshotsMatch(LibrarySnapshot left, LibrarySnapshot right) =>
+    Isolate.run(() => left == right);

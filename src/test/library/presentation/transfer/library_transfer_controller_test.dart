@@ -231,7 +231,7 @@ void main() {
     test('rebuilds the plan with the new selection', () async {
       await _startRaycastImport(repository, files, controller);
 
-      controller.updateSelection(RaycastSelection(excludedIndices: {1}));
+      await controller.updateSelection(RaycastSelection(excludedIndices: {1}));
 
       final review = controller.state as LibraryTransferRaycastReview;
       expect(review.plan.rows.last.outcome, ImportRowOutcome.userSkipped);
@@ -392,7 +392,7 @@ void main() {
     });
 
     test(
-      'verification mismatch returns to the review and blocks apply',
+      'verification mismatch explains failure and allows a new review',
       () async {
         await _startRestoreImport(repository, files, controller);
         await controller.continueFromReview();
@@ -413,9 +413,11 @@ void main() {
         );
         await controller.verifyBackupCopy();
 
-        expect(controller.state, isA<LibraryTransferRestoreReview>());
+        expect(controller.state, isA<LibraryTransferFailed>());
         await controller.apply();
         expect(repository.calls, isNot(contains('restoreSnapshot')));
+        controller.resumeReview();
+        expect(controller.state, isA<LibraryTransferRestoreReview>());
       },
     );
 
@@ -429,7 +431,7 @@ void main() {
       final done = controller.state as LibraryTransferRestoreDone;
       expect(done.entriesChanged, 1);
       expect(done.categoriesChanged, 0);
-      expect(done.backupName, 'prompt-library-backup-2026-09-11.json');
+      expect(done.backupName, 'backup.json');
       expect(library.state.isUnderMaintenance, isFalse);
       await library.markCopied('kept-1');
     });
@@ -607,10 +609,12 @@ void main() {
       final applying = controller.apply();
       await pumpEventQueue();
       await controller.dispose();
+      final remainedLocked = library.state.isUnderMaintenance;
       gate.complete();
       await applying;
       await pumpEventQueue();
 
+      expect(remainedLocked, isTrue);
       expect(repository.calls, contains('restoreSnapshot'));
       expect(library.state.isUnderMaintenance, isFalse);
       final snapshot = await repository.getSnapshot();
@@ -641,6 +645,62 @@ void main() {
         ),
       );
     });
+
+    test('snapshot errors invalidate an approved operation', () async {
+      final expected = await _startRestoreImport(repository, files, controller);
+      await _verifyThroughBackup(files, controller, expected);
+      repository.emitFailure(
+        const LibraryFailure.databaseFailure(
+          code: LibraryDatabaseFailureCode.transactionFailed,
+        ),
+      );
+      await pumpEventQueue();
+
+      expect(controller.state, isA<LibraryTransferFailed>());
+      await controller.apply();
+      expect(repository.calls, isNot(contains('restoreSnapshot')));
+    });
+
+    test('repository movement during backup prevents verification', () async {
+      await _startRestoreImport(repository, files, controller);
+      await controller.continueFromReview();
+      final gate = Completer<void>();
+      files.exportGate = gate;
+      files.exportResult = const DocumentSaved(path: '/tmp/copy.json');
+      final saving = controller.createBackupCopy();
+      await repository.markCopied('kept-1');
+      gate.complete();
+      await saving;
+
+      expect(controller.state, isA<LibraryTransferStale>());
+    });
+
+    test('saved backup name reflects the user selected path', () async {
+      await _startRestoreImport(repository, files, controller);
+      await controller.continueFromReview();
+      files.exportResult = const DocumentSaved(path: '/tmp/renamed-copy.json');
+      await controller.createBackupCopy();
+
+      expect(
+        (controller.state as LibraryTransferBackupSaved).backupName,
+        'renamed-copy.json',
+      );
+    });
+
+    test(
+      'snapshot read failure is visible and a fresh export can retry',
+      () async {
+        repository.nextReadFailure = const LibraryFailure.databaseFailure(
+          code: LibraryDatabaseFailureCode.readFailed,
+        );
+        await controller.prepareExport(DocumentExportKind.json);
+        expect(controller.state, isA<LibraryTransferFailed>());
+        expect(controller.canResumeReview, isFalse);
+        controller.cancel();
+        await controller.prepareExport(DocumentExportKind.json);
+        expect(controller.state, isA<LibraryTransferExportReady>());
+      },
+    );
   });
 }
 

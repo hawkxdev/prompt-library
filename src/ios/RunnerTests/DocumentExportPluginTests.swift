@@ -12,8 +12,14 @@ private final class FakeTempWriter: DocumentTempWriting {
   private var files: [URL: Data] = [:]
 
   func contents(of directory: URL) -> [URL] {
-    files.keys.filter { $0.deletingLastPathComponent() == directory }
-      .sorted { $0.path < $1.path }
+    let prefix = directory.standardizedFileURL.path + "/"
+    var children = Set<URL>()
+    for url in files.keys where url.standardizedFileURL.path.hasPrefix(prefix) {
+      let remainder = String(url.standardizedFileURL.path.dropFirst(prefix.count))
+      guard let first = remainder.split(separator: "/").first else { continue }
+      children.insert(directory.appendingPathComponent(String(first)))
+    }
+    return children.sorted { $0.path < $1.path }
   }
 
   func write(_ data: Data, to url: URL) throws {
@@ -26,11 +32,24 @@ private final class FakeTempWriter: DocumentTempWriting {
 
   func removeItem(at url: URL) throws {
     removedURLs.append(url)
-    files.removeValue(forKey: url)
+    let prefix = url.standardizedFileURL.path + "/"
+    files = files.filter {
+      $0.key != url && !$0.key.standardizedFileURL.path.hasPrefix(prefix)
+    }
   }
 
   func hasFile(at url: URL) -> Bool {
     files[url] != nil
+  }
+
+  func files(under directory: URL) -> [URL] {
+    let prefix = directory.standardizedFileURL.path + "/"
+    return files.keys.filter { $0.standardizedFileURL.path.hasPrefix(prefix) }
+      .sorted { $0.path < $1.path }
+  }
+
+  func data(at url: URL) -> Data? {
+    files[url]
   }
 
   func seed(_ url: URL, data: Data) {
@@ -41,11 +60,18 @@ private final class FakeTempWriter: DocumentTempWriting {
 /// Records presentations and replays delegate events in tests.
 @MainActor
 private final class FakePicker: DocumentPickerPresenting {
+  private(set) var presentAttemptCount = 0
   private(set) var presentCount = 0
-  weak var delegate: UIDocumentPickerDelegate?
+  private(set) var dismissCount = 0
+  var allowsPresentation = true
+  let delegate: UIDocumentPickerDelegate
+  let fileURL: URL
   let controller: UIDocumentPickerViewController
+  private var dismissalCompletion: (() -> Void)?
 
-  init() {
+  init(fileURL: URL, delegate: UIDocumentPickerDelegate) {
+    self.fileURL = fileURL
+    self.delegate = delegate
     // The system picker validates the exported file exists at creation.
     let stub = FileManager.default.temporaryDirectory
       .appendingPathComponent("fake-picker-\(UUID().uuidString).json")
@@ -53,30 +79,46 @@ private final class FakePicker: DocumentPickerPresenting {
     controller = UIDocumentPickerViewController(forExporting: [stub], asCopy: true)
   }
 
-  func present() {
+  func present() -> Bool {
+    presentAttemptCount += 1
+    guard allowsPresentation else { return false }
     presentCount += 1
+    return true
+  }
+
+  func dismiss(completion: @escaping () -> Void) {
+    dismissCount += 1
+    dismissalCompletion = completion
+  }
+
+  func completeDismissal() {
+    let completion = dismissalCompletion
+    dismissalCompletion = nil
+    completion?()
   }
 
   func fireCancelled() {
-    delegate?.documentPickerWasCancelled?(controller)
+    delegate.documentPickerWasCancelled?(controller)
   }
 
   func firePick(at urls: [URL]) {
-    delegate?.documentPicker?(controller, didPickDocumentsAt: urls)
+    delegate.documentPicker?(controller, didPickDocumentsAt: urls)
   }
 }
 
 @MainActor
 private final class FakePickerMaker: DocumentPickerMaking {
   private(set) var pickers: [FakePicker] = []
+  var allowsNextPresentation = true
 
   func makePicker(
     for fileURL: URL,
     presenter: UIViewController,
     delegate: UIDocumentPickerDelegate
   ) -> DocumentPickerPresenting {
-    let picker = FakePicker()
-    picker.delegate = delegate
+    let picker = FakePicker(fileURL: fileURL, delegate: delegate)
+    picker.allowsPresentation = allowsNextPresentation
+    allowsNextPresentation = true
     pickers.append(picker)
     return picker
   }
@@ -93,8 +135,7 @@ private final class NonRetainingPickerMaker: DocumentPickerMaking {
     presenter: UIViewController,
     delegate: UIDocumentPickerDelegate
   ) -> DocumentPickerPresenting {
-    let picker = FakePicker()
-    picker.delegate = delegate
+    let picker = FakePicker(fileURL: fileURL, delegate: delegate)
     lastMade = picker
     return picker
   }
@@ -109,6 +150,21 @@ private final class FakeChannel: DocumentExportChanneling {
   }
 }
 
+/// Presenter exposing UIKit transition states.
+@MainActor
+private final class TransitioningPresenter: UIViewController {
+  var reportsBeingPresented = false
+  var reportsBeingDismissed = false
+
+  override var isBeingPresented: Bool {
+    reportsBeingPresented
+  }
+
+  override var isBeingDismissed: Bool {
+    reportsBeingDismissed
+  }
+}
+
 /// Semantics of the iOS export plugin over injected seams.
 @MainActor
 final class DocumentExportPluginTests: XCTestCase {
@@ -116,6 +172,7 @@ final class DocumentExportPluginTests: XCTestCase {
   private var writer: FakeTempWriter!
   private var maker: FakePickerMaker!
   private var presenter: UIViewController!
+  private var window: UIWindow!
   private var tempDirectory: URL!
   private var plugin: DocumentExportPlugin!
   private var replies: [[String: String]] = []
@@ -126,6 +183,9 @@ final class DocumentExportPluginTests: XCTestCase {
     writer = FakeTempWriter()
     maker = FakePickerMaker()
     presenter = UIViewController()
+    window = UIWindow(frame: UIScreen.main.bounds)
+    window.rootViewController = presenter
+    window.makeKeyAndVisible()
     replies = []
     tempDirectory = FileManager.default.temporaryDirectory
       .appendingPathComponent("doc_plugin_tests_\(UUID().uuidString)", isDirectory: true)
@@ -133,6 +193,10 @@ final class DocumentExportPluginTests: XCTestCase {
   }
 
   override func tearDown() {
+    plugin?.shutdown()
+    maker?.pickers.last?.completeDismissal()
+    window?.isHidden = true
+    window = nil
     try? FileManager.default.removeItem(at: tempDirectory)
     // FakePicker stub files live in the shared temporary directory (C-3).
     let stubs = (try? FileManager.default.contentsOfDirectory(
@@ -152,9 +216,8 @@ final class DocumentExportPluginTests: XCTestCase {
       presenterProvider: { [presenter] in presenter },
       tempDirectory: tempDirectory
     )
-    // The handler retains the plugin, mirroring production registration.
-    channel.setMethodCallHandler { [plugin] call, result in
-      plugin.handle(call, result: result)
+    channel.setMethodCallHandler { [weak plugin] call, result in
+      plugin?.handle(call, result: result)
     }
   }
 
@@ -198,13 +261,29 @@ final class DocumentExportPluginTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: destination) }
 
     callExport(bytes: payload)
-    let temp = writer.contents(of: tempDirectory).first!
+    let temp = writer.files(under: tempDirectory).first!
     XCTAssertTrue(writer.hasFile(at: temp))
     maker.pickers[0].firePick(at: [destination])
 
     XCTAssertEqual(replies, [["outcome": "saved", "path": destination.path]])
     XCTAssertTrue(writer.removedURLs.contains(temp))
     XCTAssertTrue(writer.contents(of: tempDirectory).isEmpty)
+  }
+
+  func testStalePickerCannotCompleteNextExport() {
+    callExport(name: "first.json")
+    let oldPicker = maker.pickers[0]
+    oldPicker.fireCancelled()
+    callExport(name: "second.json")
+    let currentTemporary = writer.files(under: tempDirectory).first!
+
+    oldPicker.fireCancelled()
+
+    XCTAssertEqual(replies.count, 1)
+    XCTAssertTrue(writer.hasFile(at: currentTemporary))
+    XCTAssertEqual(maker.pickers[1].dismissCount, 0)
+    maker.pickers[1].fireCancelled()
+    XCTAssertEqual(replies.count, 2)
   }
 
   func testEmptyBytesRejectedWithoutPresentation() {
@@ -216,7 +295,7 @@ final class DocumentExportPluginTests: XCTestCase {
 
   func testCancelledOutcomeRemovesTemporaryFile() {
     callExport()
-    let temp = writer.contents(of: tempDirectory).first!
+    let temp = writer.files(under: tempDirectory).first!
 
     maker.pickers[0].fireCancelled()
 
@@ -269,7 +348,7 @@ final class DocumentExportPluginTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: destination) }
 
     callExport(bytes: payload)
-    let temp = writer.contents(of: tempDirectory).first!
+    let temp = writer.files(under: tempDirectory).first!
     maker.pickers[0].firePick(at: [destination])
     maker.pickers[0].firePick(at: [destination])
 
@@ -277,17 +356,23 @@ final class DocumentExportPluginTests: XCTestCase {
     XCTAssertFalse(writer.hasFile(at: temp))
   }
 
-  func testShutdownIsIdempotentDropsLateCallbacksAndClearsTemporary() {
+  func testShutdownRetainsSourceUntilOneDismissalCompletion() {
     callExport()
-    let temp = writer.contents(of: tempDirectory).first!
+    let temp = writer.files(under: tempDirectory).first!
+    let activePicker = maker.pickers[0]
 
     plugin.shutdown()
     plugin.shutdown()
-    maker.pickers[0].fireCancelled()
+    activePicker.fireCancelled()
 
     XCTAssertEqual(replies.count, 0)
-    XCTAssertFalse(writer.hasFile(at: temp))
+    XCTAssertTrue(writer.hasFile(at: temp))
+    XCTAssertEqual(activePicker.dismissCount, 1)
     XCTAssertNil(channel.lastHandler)
+
+    activePicker.completeDismissal()
+
+    XCTAssertFalse(writer.hasFile(at: temp))
   }
 
   func testActivePickerRetainedByPluginAndReleasedAfterOutcome() {
@@ -312,5 +397,117 @@ final class DocumentExportPluginTests: XCTestCase {
     makePlugin()
 
     XCTAssertFalse(writer.hasFile(at: leftover))
+  }
+
+  func testRegistrationPublishesPluginForEngineLifecycle() {
+    var engine: FlutterEngine? = FlutterEngine(name: "document-export-registration-test")
+    XCTAssertTrue(engine?.run() ?? false)
+    guard let registrar = engine?.registrar(forPlugin: "DocumentExportPlugin") else {
+      XCTFail("Expected registrar")
+      return
+    }
+
+    DocumentExportPlugin.register(with: registrar)
+
+    let published = engine?.valuePublished(
+      byPlugin: "DocumentExportPlugin"
+    ) as? DocumentExportPlugin
+    XCTAssertNotNil(published)
+    XCTAssertFalse(published?.isShutdown ?? true)
+    engine?.destroyContext()
+    engine = nil
+    XCTAssertTrue(published?.isShutdown ?? false)
+  }
+
+  func testDetachedPresenterRejectedBeforePickerCreation() {
+    plugin.shutdown()
+    presenter = UIViewController()
+    makePlugin()
+
+    callExport()
+
+    XCTAssertEqual(replies, [["outcome": "unavailable"]])
+    XCTAssertTrue(maker.pickers.isEmpty)
+    XCTAssertTrue(writer.files(under: tempDirectory).isEmpty)
+  }
+
+  func testAttachedPresenterStartsPresentation() {
+    callExport()
+
+    XCTAssertTrue(replies.isEmpty)
+    XCTAssertEqual(maker.pickers.count, 1)
+    XCTAssertEqual(maker.pickers[0].presentAttemptCount, 1)
+    XCTAssertEqual(maker.pickers[0].presentCount, 1)
+  }
+
+  func testPresentingPresenterRejectedBeforePickerCreation() {
+    plugin.shutdown()
+    let transitioning = TransitioningPresenter()
+    transitioning.reportsBeingPresented = true
+    presenter = transitioning
+    window.rootViewController = presenter
+    makePlugin()
+
+    callExport()
+
+    XCTAssertEqual(replies, [["outcome": "unavailable"]])
+    XCTAssertTrue(maker.pickers.isEmpty)
+  }
+
+  func testDismissingPresenterRejectedBeforePickerCreation() {
+    plugin.shutdown()
+    let transitioning = TransitioningPresenter()
+    transitioning.reportsBeingDismissed = true
+    presenter = transitioning
+    window.rootViewController = presenter
+    makePlugin()
+
+    callExport()
+
+    XCTAssertEqual(replies, [["outcome": "unavailable"]])
+    XCTAssertTrue(maker.pickers.isEmpty)
+  }
+
+  func testPickerPresentationRefusalReturnsUnavailableAndCleansSource() {
+    maker.allowsNextPresentation = false
+
+    callExport()
+
+    XCTAssertEqual(replies, [["outcome": "unavailable"]])
+    XCTAssertEqual(maker.pickers[0].presentAttemptCount, 1)
+    XCTAssertEqual(maker.pickers[0].presentCount, 0)
+    XCTAssertTrue(writer.files(under: tempDirectory).isEmpty)
+  }
+
+  func testNewPluginDoesNotSweepAnotherPluginsLiveSource() {
+    callExport(name: "shared.json", bytes: Data("first".utf8))
+    let firstPicker = maker.pickers[0]
+    let firstSource = firstPicker.fileURL
+    let secondChannel = FakeChannel()
+    let secondMaker = FakePickerMaker()
+    let secondPlugin = DocumentExportPlugin(
+      channel: secondChannel,
+      writer: writer,
+      pickerMaker: secondMaker,
+      presenterProvider: { [presenter] in presenter },
+      tempDirectory: tempDirectory
+    )
+    secondChannel.setMethodCallHandler { [weak secondPlugin] call, result in
+      secondPlugin?.handle(call, result: result)
+    }
+
+    secondChannel.lastHandler?(
+      exportCall(name: "shared.json", bytes: Data("second".utf8))
+    ) { _ in }
+
+    XCTAssertTrue(writer.hasFile(at: firstSource))
+    XCTAssertEqual(writer.data(at: firstSource), Data("first".utf8))
+    XCTAssertEqual(secondMaker.pickers[0].fileURL.lastPathComponent, "shared.json")
+    XCTAssertEqual(firstSource.lastPathComponent, "shared.json")
+    XCTAssertNotEqual(firstSource, secondMaker.pickers[0].fileURL)
+    XCTAssertEqual(writer.files(under: tempDirectory).count, 2)
+
+    firstPicker.fireCancelled()
+    secondMaker.pickers[0].fireCancelled()
   }
 }

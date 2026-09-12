@@ -68,7 +68,10 @@ final class FoundationDocumentTempWriter: DocumentTempWriting {
 @MainActor
 protocol DocumentPickerPresenting: AnyObject {
   /// Presents the system dialog to the user.
-  func present()
+  func present() -> Bool
+
+  /// Dismisses the system dialog and reports release completion.
+  func dismiss(completion: @escaping () -> Void)
 }
 
 /// Builds the picker for one export operation.
@@ -97,8 +100,35 @@ final class SystemDocumentPicker: NSObject, UIDocumentPickerDelegate, DocumentPi
     controller.delegate = self
   }
 
-  func present() {
+  func present() -> Bool {
+    guard
+      presenter.viewIfLoaded?.window != nil,
+      presenter.presentedViewController == nil,
+      !presenter.isBeingPresented,
+      !presenter.isBeingDismissed,
+      presenter.transitionCoordinator == nil
+    else {
+      return false
+    }
     presenter.present(controller, animated: true)
+    return presenter.presentedViewController === controller
+  }
+
+  func dismiss(completion: @escaping () -> Void) {
+    if controller.isBeingDismissed {
+      guard let coordinator = controller.transitionCoordinator else { return }
+      _ = coordinator.animate(alongsideTransition: nil) { _ in completion() }
+      return
+    }
+    guard
+      controller.presentingViewController != nil ||
+        controller.isBeingPresented ||
+        presenter.presentedViewController === controller
+    else {
+      completion()
+      return
+    }
+    controller.dismiss(animated: false, completion: completion)
   }
 
   func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
@@ -142,9 +172,8 @@ protocol DocumentExportChanneling: AnyObject {
 final class FlutterDocumentExportChannel: DocumentExportChanneling {
   private let channel: FlutterMethodChannel
 
-  init(name: String, messenger: FlutterBinaryMessenger) {
-    channel = FlutterMethodChannel(name: name, binaryMessenger: messenger)
-
+  init(channel: FlutterMethodChannel) {
+    self.channel = channel
   }
 
   func setMethodCallHandler(_ handler: FlutterMethodCallHandler?) {
@@ -152,14 +181,37 @@ final class FlutterDocumentExportChannel: DocumentExportChanneling {
   }
 }
 
+/// Routes callbacks for exactly one export operation.
+@MainActor
+private final class DocumentExportOperationDelegate: NSObject, UIDocumentPickerDelegate {
+  private let operationID: UUID
+  private weak var owner: DocumentExportPlugin?
+
+  init(operationID: UUID, owner: DocumentExportPlugin) {
+    self.operationID = operationID
+    self.owner = owner
+  }
+
+  func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+    owner?.completeCancellation(operationID: operationID)
+  }
+
+  func documentPicker(
+    _ controller: UIDocumentPickerViewController,
+    didPickDocumentsAt urls: [URL]
+  ) {
+    owner?.completePick(operationID: operationID, urls: urls)
+  }
+}
+
 /// Registers the document export channel and owns one active export.
 ///
 /// The plugin owns the temporary document and the single active dialog,
-/// finishes the result exactly once on success, cancellation, presentation
-/// failure, or teardown, and sweeps leftovers of unfinished operations at
-/// registration time (HLD architectural decision 4).
+/// delivers one result for an operation outcome or presentation failure,
+/// invalidates delivery during teardown, and sweeps abandoned leftovers at
+/// registration time.
 @MainActor
-final class DocumentExportPlugin: NSObject, UIDocumentPickerDelegate {
+final class DocumentExportPlugin: NSObject, @preconcurrency FlutterPlugin {
   /// Wire channel name shared with the Dart client.
   static let channelName = "dev.hawkx.promptlibrary/document_export"
 
@@ -168,10 +220,16 @@ final class DocumentExportPlugin: NSObject, UIDocumentPickerDelegate {
   private let pickerMaker: DocumentPickerMaking
   private let presenterProvider: () -> UIViewController?
   private let tempDirectory: URL
+  private static var activeOperationDirectories = Set<URL>()
   private var callback: FlutterResult?
   private var payload: Data?
   private var temporary: URL?
+  private var operationDirectory: URL?
+  private var operationID: UUID?
+  private var operationDelegate: DocumentExportOperationDelegate?
   private var presenting: DocumentPickerPresenting?
+  private var shutdownRetainer: DocumentExportPlugin?
+  private(set) var isShutdown = false
 
   /// Creates the plugin over injected seams and sweeps stale leftovers.
   init(
@@ -193,35 +251,53 @@ final class DocumentExportPlugin: NSObject, UIDocumentPickerDelegate {
 
   /// Registers the plugin on the implicit-engine registrar.
   static func register(with registrar: FlutterPluginRegistrar) {
+    let flutterChannel = FlutterMethodChannel(
+      name: channelName,
+      binaryMessenger: registrar.messenger()
+    )
     let plugin = DocumentExportPlugin(
-      channel: FlutterDocumentExportChannel(
-        name: channelName,
-        messenger: registrar.messenger()
-      ),
+      channel: FlutterDocumentExportChannel(channel: flutterChannel),
       writer: FoundationDocumentTempWriter(),
       pickerMaker: SystemDocumentPickerMaker(),
       presenterProvider: { registrar.viewController },
       tempDirectory: FileManager.default.temporaryDirectory
         .appendingPathComponent("document_export", isDirectory: true)
     )
-    // The handler retains the plugin for the app lifetime; shutdown() detaches.
-    plugin.channel.setMethodCallHandler { call, result in
-      plugin.handle(call, result: result)
-    }
+    registrar.publish(plugin)
+    registrar.addMethodCallDelegate(plugin, channel: flutterChannel)
   }
 
   /// Detaches the channel and retracts the active operation; idempotent.
   func shutdown() {
+    guard !isShutdown else { return }
+    isShutdown = true
     channel.setMethodCallHandler(nil)
     callback = nil
     payload = nil
-    presenting = nil
-    retractTemporary()
+    operationID = nil
+    guard let picker = presenting else {
+      operationDelegate = nil
+      retractTemporary()
+      return
+    }
+    shutdownRetainer = self
+    picker.dismiss { [weak self] in
+      self?.completeShutdownCleanup()
+    }
+  }
+
+  /// Releases resources when the owning Flutter engine detaches.
+  func detachFromEngine(for registrar: FlutterPluginRegistrar) {
+    shutdown()
   }
 
   func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     guard call.method == "exportDocument" else {
       result(FlutterMethodNotImplemented)
+      return
+    }
+    guard !isShutdown else {
+      result(reply(.unavailable))
       return
     }
     // Single active dialog: a second request never presents a second picker.
@@ -248,41 +324,58 @@ final class DocumentExportPlugin: NSObject, UIDocumentPickerDelegate {
       result(reply(.invalidArguments))
       return
     }
-    guard let presenter = presenterProvider(), presenter.presentedViewController == nil else {
+    guard let presenter = presenterProvider(), isReadyForPresentation(presenter) else {
       result(reply(.unavailable))
       return
     }
     let fileName = name.hasSuffix(".\(kind.fileExtension)")
       ? name
       : "\(name).\(kind.fileExtension)"
-    let url = tempDirectory.appendingPathComponent(fileName)
+    let currentOperationID = UUID()
+    let currentOperationDirectory = tempDirectory.appendingPathComponent(
+      currentOperationID.uuidString,
+      isDirectory: true
+    )
+    let url = currentOperationDirectory.appendingPathComponent(fileName)
     do {
+      try FileManager.default.createDirectory(
+        at: currentOperationDirectory,
+        withIntermediateDirectories: true
+      )
       try writer.write(typed.data, to: url)
     } catch {
       try? writer.removeItem(at: url)
+      try? writer.removeItem(at: currentOperationDirectory)
       result(reply(.writeFailed))
       return
     }
+    Self.activeOperationDirectories.insert(currentOperationDirectory)
     payload = typed.data
     temporary = url
+    operationDirectory = currentOperationDirectory
+    operationID = currentOperationID
     callback = result
-    let picker = pickerMaker.makePicker(for: url, presenter: presenter, delegate: self)
-    // The plugin owns the active picker: the system controller's delegate is
-    // weak, so nothing else keeps the wrapper alive during presentation.
+    let delegate = DocumentExportOperationDelegate(
+      operationID: currentOperationID,
+      owner: self
+    )
+    operationDelegate = delegate
+    let picker = pickerMaker.makePicker(for: url, presenter: presenter, delegate: delegate)
     presenting = picker
-    picker.present()
+    guard picker.present() else {
+      finish(operationID: currentOperationID, reply(.unavailable))
+      return
+    }
   }
 
-  func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-    finish(reply(.cancelled))
+  fileprivate func completeCancellation(operationID: UUID) {
+    finish(operationID: operationID, reply(.cancelled))
   }
 
-  func documentPicker(
-    _ controller: UIDocumentPickerViewController,
-    didPickDocumentsAt urls: [URL]
-  ) {
+  fileprivate func completePick(operationID: UUID, urls: [URL]) {
+    guard self.operationID == operationID else { return }
     guard let destination = urls.first else {
-      finish(reply(.writeFailed))
+      finish(operationID: operationID, reply(.writeFailed))
       return
     }
     // The copy is complete when the delegate fires; balanced scoped access.
@@ -291,33 +384,60 @@ final class DocumentExportPlugin: NSObject, UIDocumentPickerDelegate {
     guard let exported = try? Data(contentsOf: destination), let expected = payload,
       exported == expected
     else {
-      finish(reply(.verifyFailed))
+      finish(operationID: operationID, reply(.verifyFailed))
       return
     }
-    finish(["outcome": DocumentExportOutcome.saved.rawValue, "path": destination.path])
+    finish(
+      operationID: operationID,
+      ["outcome": DocumentExportOutcome.saved.rawValue, "path": destination.path]
+    )
   }
 
   /// Sweeps leftovers of operations that never reached a delegate outcome.
   private func sweepLeftovers() {
     for url in writer.contents(of: tempDirectory) {
+      guard !Self.activeOperationDirectories.contains(url) else { continue }
       try? writer.removeItem(at: url)
     }
   }
 
   /// Delivers exactly once and retracts the operation-owned state.
-  private func finish(_ reply: [String: String]) {
-    guard let result = callback else { return }
+  private func finish(operationID: UUID, _ reply: [String: String]) {
+    guard self.operationID == operationID, let result = callback else { return }
     callback = nil
     payload = nil
+    self.operationID = nil
+    operationDelegate = nil
     presenting = nil
     retractTemporary()
     result(reply)
   }
 
   private func retractTemporary() {
-    guard let url = temporary else { return }
+    guard let directory = operationDirectory else { return }
+    Self.activeOperationDirectories.remove(directory)
+    operationDirectory = nil
+    let url = temporary
     temporary = nil
-    try? writer.removeItem(at: url)
+    if let url {
+      try? writer.removeItem(at: url)
+    }
+    try? writer.removeItem(at: directory)
+  }
+
+  private func completeShutdownCleanup() {
+    presenting = nil
+    operationDelegate = nil
+    retractTemporary()
+    shutdownRetainer = nil
+  }
+
+  private func isReadyForPresentation(_ presenter: UIViewController) -> Bool {
+    presenter.viewIfLoaded?.window != nil &&
+      presenter.presentedViewController == nil &&
+      !presenter.isBeingPresented &&
+      !presenter.isBeingDismissed &&
+      presenter.transitionCoordinator == nil
   }
 
   private func reply(_ outcome: DocumentExportOutcome) -> [String: String] {

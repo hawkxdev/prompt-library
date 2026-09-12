@@ -1,6 +1,8 @@
 /// File-selector backed document boundary.
 library;
 
+import 'dart:io';
+
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/services.dart';
 
@@ -50,7 +52,11 @@ final class FileSelectorDocumentFiles implements LibraryDocumentFiles {
       file = await _pickFile();
     } on MissingPluginException {
       return const DocumentPickUnavailable();
-    } on Object {
+    } on PlatformException {
+      return const DocumentPickFailure(
+        code: DocumentFileFailureCode.readFailed,
+      );
+    } on IOException {
       return const DocumentPickFailure(
         code: DocumentFileFailureCode.readFailed,
       );
@@ -74,11 +80,16 @@ final class FileSelectorDocumentFiles implements LibraryDocumentFiles {
         sink.add(chunk);
       }
       return DocumentPicked(fileName: file.name, bytes: sink.takeBytes());
-    } on DocumentFailure {
+    } on DocumentFailure catch (failure) {
+      if (failure.code != DocumentFailureCode.limitExceeded) rethrow;
       return const DocumentPickFailure(
         code: DocumentFileFailureCode.limitExceeded,
       );
-    } on Object {
+    } on PlatformException {
+      return const DocumentPickFailure(
+        code: DocumentFileFailureCode.readFailed,
+      );
+    } on IOException {
       return const DocumentPickFailure(
         code: DocumentFileFailureCode.readFailed,
       );

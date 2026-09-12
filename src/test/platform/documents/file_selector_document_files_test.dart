@@ -3,6 +3,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/services.dart';
@@ -47,14 +48,17 @@ final class _LyingLengthFile extends XFile {
 
 /// XFile whose read fails after a successful length probe.
 final class _BrokenReadFile extends XFile {
-  _BrokenReadFile() : super.fromData(Uint8List.fromList([1, 2, 3]));
+  _BrokenReadFile([this.failure = const FileSystemException('read failed')])
+    : super.fromData(Uint8List.fromList([1, 2, 3]));
+
+  final Object failure;
 
   @override
   Future<int> length() async => 3;
 
   @override
   Stream<Uint8List> openRead([int? start, int? end]) {
-    return Stream<Uint8List>.error(StateError('read failed'));
+    return Stream<Uint8List>.error(failure);
   }
 }
 
@@ -147,6 +151,27 @@ void main() {
       final result = await files.pickDocument();
 
       expect(result, isA<DocumentPickUnavailable>());
+    });
+
+    test('unexpected picker errors retain their identity', () async {
+      final error = StateError('picker bug');
+      final files = FileSelectorDocumentFiles(pickFile: () => throw error);
+      await expectLater(files.pickDocument(), throwsA(same(error)));
+    });
+
+    test('unexpected streamed errors retain their identity', () async {
+      final error = StateError('stream bug');
+      final files = FileSelectorDocumentFiles(
+        pickFile: () async => _BrokenReadFile(error),
+      );
+      await expectLater(files.pickDocument(), throwsA(same(error)));
+    });
+
+    test('expected platform errors are typed read failures', () async {
+      final files = FileSelectorDocumentFiles(
+        pickFile: () => throw PlatformException(code: 'read_failed'),
+      );
+      expect(await files.pickDocument(), isA<DocumentPickFailure>());
     });
   });
 

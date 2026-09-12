@@ -1,10 +1,14 @@
 import Cocoa
+import Darwin
 import FlutterMacOS
 import UniformTypeIdentifiers
 
 /// Writes exported bytes without overwriting and verifies the result.
 @MainActor
 protocol DocumentWriting: AnyObject {
+  /// Creates a private staging directory on the destination filesystem.
+  func stagingDirectory(for destination: URL) throws -> URL
+
   /// Writes bytes refusing to overwrite an existing file.
   func write(_ data: Data, to url: URL) throws
 
@@ -13,11 +17,23 @@ protocol DocumentWriting: AnyObject {
 
   /// Removes a partial or failed export file.
   func removeItem(at url: URL) throws
+
+  /// Publishes the verified file without replacing the destination.
+  func publish(_ staged: URL, to destination: URL) throws
 }
 
 /// Foundation writer enforcing without-overwriting semantics.
 @MainActor
 final class FoundationDocumentWriter: DocumentWriting {
+  func stagingDirectory(for destination: URL) throws -> URL {
+    try FileManager.default.url(
+      for: .itemReplacementDirectory,
+      in: .userDomainMask,
+      appropriateFor: destination,
+      create: true
+    )
+  }
+
   func write(_ data: Data, to url: URL) throws {
     try data.write(to: url, options: [.withoutOverwriting])
   }
@@ -28,6 +44,16 @@ final class FoundationDocumentWriter: DocumentWriting {
 
   func removeItem(at url: URL) throws {
     try FileManager.default.removeItem(at: url)
+  }
+
+  func publish(_ staged: URL, to destination: URL) throws {
+    // Foundation rejects atomic combined with withoutOverwriting.
+    // Rename the verified staging inode with exclusive destination creation.
+    guard renamex_np(staged.path, destination.path, UInt32(RENAME_EXCL)) == 0 else {
+      let code = errno
+      if code == EEXIST { throw CocoaError(.fileWriteFileExists) }
+      throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+    }
   }
 }
 
@@ -68,23 +94,34 @@ final class DocumentExportCoordinator {
 
   /// Writes, verifies and cleans up; never overwrites an existing file.
   func performExport(_ data: Data, to url: URL) -> DocumentExportOutcome {
+    let directory: URL
     do {
-      try writer.write(data, to: url)
+      directory = try writer.stagingDirectory(for: url)
+    } catch {
+      return .writeFailed
+    }
+    defer { cleanup(directory) }
+    let staged = directory.appendingPathComponent("document")
+    do {
+      try writer.write(data, to: staged)
+    } catch {
+      return .writeFailed
+    }
+    guard let written = writer.data(at: staged), written == data else {
+      return .verifyFailed
+    }
+    do {
+      try writer.publish(staged, to: url)
     } catch let error as CocoaError where error.code == .fileWriteFileExists {
       return .existingFile
     } catch {
-      cleanup(url)
       return .writeFailed
-    }
-    guard let written = writer.data(at: url), written == data else {
-      cleanup(url)
-      return .verifyFailed
     }
     return .saved
   }
 
-  /// Removes a failed export attempt; cleanup failures stay silent.
-  func cleanup(_ url: URL) {
+  /// Removes only the private staging directory owned by this export.
+  private func cleanup(_ url: URL) {
     try? writer.removeItem(at: url)
   }
 }

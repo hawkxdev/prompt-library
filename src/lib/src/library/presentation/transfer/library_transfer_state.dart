@@ -98,10 +98,13 @@ final class LibraryTransferRestoreReview extends LibraryTransferState {
 /// Raycast import preview with per-row outcomes.
 final class LibraryTransferRaycastReview extends LibraryTransferState {
   /// Creates the Raycast-review state.
-  const LibraryTransferRaycastReview({required this.plan});
+  const LibraryTransferRaycastReview({required this.plan, this.selection});
 
   /// Classified rows against the captured snapshot.
   final RaycastImportPlan plan;
+
+  /// Explicit choices for this source document.
+  final RaycastSelection? selection;
 
   @override
   bool operator ==(Object other) =>
@@ -268,10 +271,10 @@ final class LibraryTransferRestoreDone extends LibraryTransferState {
 /// The Raycast import applied with mutually exclusive row outcomes.
 final class LibraryTransferImportDone extends LibraryTransferState {
   /// Creates the import-done state.
-  const LibraryTransferImportDone({
-    required this.outcomeCounts,
+  LibraryTransferImportDone({
+    required Map<ImportRowOutcome, int> outcomeCounts,
     required this.warningRowCount,
-  });
+  }) : outcomeCounts = Map.unmodifiable(outcomeCounts);
 
   /// Counts per row outcome; added plus every skipped kind equals the row
   /// count of the source file.
@@ -292,7 +295,9 @@ final class LibraryTransferImportDone extends LibraryTransferState {
   int get hashCode => Object.hash(
     runtimeType,
     Object.hashAll(
-      outcomeCounts.entries.map((entry) => Object.hash(entry.key, entry.value)),
+      ImportRowOutcome.values.map(
+        (key) => Object.hash(key, outcomeCounts[key]),
+      ),
     ),
     warningRowCount,
   );
