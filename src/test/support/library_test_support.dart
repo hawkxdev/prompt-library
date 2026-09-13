@@ -37,6 +37,10 @@ final class TestLibraryRepository implements LibraryRepository {
   /// Blocks the next repository mutation until completed.
   Completer<void>? nextMutationGate;
 
+  /// Runs once after the next snapshot read has captured its result and
+  /// before the reader resumes, modelling a publication in that window.
+  void Function()? onNextRead;
+
   /// Emits a complete snapshot.
   void emit(LibrarySnapshot snapshot) {
     _snapshot = snapshot;
@@ -85,7 +89,11 @@ final class TestLibraryRepository implements LibraryRepository {
     final failure = nextReadFailure;
     nextReadFailure = null;
     if (failure != null) throw failure;
-    return _snapshot;
+    final captured = _snapshot;
+    final hook = onNextRead;
+    onNextRead = null;
+    hook?.call();
+    return captured;
   }
 
   @override

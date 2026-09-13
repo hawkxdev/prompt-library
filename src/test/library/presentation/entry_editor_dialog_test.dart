@@ -495,6 +495,86 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
     });
 
+    testWidgets('keeps an absent keyword when only the title changes', (
+      tester,
+    ) async {
+      final repository = TestLibraryRepository();
+      final controller = LibraryController(repository: repository);
+      addTearDown(() async {
+        await controller.dispose();
+        await repository.close();
+      });
+      final entry = testEntry('entry-1', title: 'Old title', body: 'Body');
+      expect(entry.keyword, isNull);
+      repository.emit(LibrarySnapshot(entries: [entry]));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showEntryEditorDialog(
+                context,
+                controller: controller,
+                entry: entry,
+              ),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const Key('editor-title')),
+        'New title',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+
+      expect(repository.calls, contains('updateEntryDetails:entry-1'));
+      expect(
+        repository.savedUpdates['entry-1']?.keyword,
+        const KeepExistingKeyword(),
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 1));
+    });
+
+    test('derives keyword intent from the absent keyword draft', () {
+      final entry = testEntry('entry-1');
+
+      expect(
+        entryUpdateFromDraft(
+          entry: entry,
+          title: 'Changed',
+          body: 'Body',
+          keyword: '',
+        ).keyword,
+        const KeepExistingKeyword(),
+      );
+      expect(
+        entryUpdateFromDraft(
+          entry: entry,
+          title: 'Changed',
+          body: 'Body',
+          keyword: ' ',
+        ).keyword,
+        const ReplaceKeyword(' '),
+      );
+      expect(
+        entryUpdateFromDraft(
+          entry: testEntry('entry-2', keyword: ''),
+          title: 'Changed',
+          body: 'Body',
+          keyword: '',
+        ).keyword,
+        const KeepExistingKeyword(),
+      );
+    });
+
     testWidgets('replaces the keyword when the field changed', (tester) async {
       final repository = TestLibraryRepository();
       final controller = LibraryController(repository: repository);

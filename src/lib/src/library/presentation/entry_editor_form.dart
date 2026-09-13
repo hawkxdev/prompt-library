@@ -47,7 +47,8 @@ LibraryMutationKey entryEditorMutationKey(Entry? entry) {
 /// The keyword intent comes from comparing the exact draft field with the
 /// stored keyword, never from the entry's origin; a cleared field is an
 /// explicit empty replacement, and an untouched field keeps the stored
-/// keyword verbatim, including blank and padded values.
+/// keyword verbatim, including blank and padded values. The comparison runs
+/// against the initial draft text, where an absent keyword is an empty field.
 EntryUpdate entryUpdateFromDraft({
   required Entry entry,
   required String title,
@@ -56,7 +57,7 @@ EntryUpdate entryUpdateFromDraft({
   String? categoryId,
   Iterable<String> tagIds = const [],
 }) {
-  final KeywordUpdate keywordIntent = keyword == entry.keyword
+  final KeywordUpdate keywordIntent = keyword == (entry.keyword ?? '')
       ? const KeepExistingKeyword()
       : ReplaceKeyword(keyword);
   return EntryUpdate(

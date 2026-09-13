@@ -53,6 +53,8 @@ final class LibraryTransferController {
 
   LibrarySnapshot? _expected;
   RaycastDocument? _raycastSource;
+  RaycastSelection? _selection;
+  Future<void>? _selectionRun;
   Uint8List? _preparedBytes;
   DocumentExportKind? _preparedKind;
   LibraryTransferState? _review;
@@ -146,23 +148,45 @@ final class LibraryTransferController {
     });
   }
 
+  /// Returns the latest selection requested for the current source.
+  ///
+  /// Row choices merge into this value rather than into the last published
+  /// review, which can still reflect an earlier recalculation.
+  RaycastSelection get raycastSelection => _selection ?? RaycastSelection();
+
   /// Rebuilds the Raycast plan with the new selection.
+  ///
+  /// A selection arriving during a recalculation replaces the pending
+  /// request; the running recalculation repeats until the published review
+  /// matches the latest request, so no user choice is dropped.
   Future<void> updateSelection(RaycastSelection selection) {
     _ensureActive();
-    return _runOperation(() async {
-      final source = _raycastSource;
-      final expected = _expected;
-      if (_state is! LibraryTransferRaycastReview ||
-          source == null ||
-          expected == null) {
-        return;
-      }
-      final plan = await _planRaycast(source, expected, selection);
+    final source = _raycastSource;
+    if (_state is! LibraryTransferRaycastReview || source == null) {
+      return Future<void>.value();
+    }
+    selection.validate(source.rows.length);
+    _selection = selection;
+    return _selectionRun ??= _runOperation(_planLatestSelection)
+        .whenComplete(() => _selectionRun = null);
+  }
+
+  /// Recalculates until the plan reflects the most recent selection.
+  Future<void> _planLatestSelection() async {
+    final source = _raycastSource;
+    final expected = _expected;
+    if (source == null || expected == null) return;
+    while (_state is LibraryTransferRaycastReview) {
+      final requested = _selection;
+      if (requested == null) return;
+      final plan = await _planRaycast(source, expected, requested);
       if (_isDisposed) return;
-      _review = LibraryTransferRaycastReview(plan: plan, selection: selection);
+      if (!identical(requested, _selection)) continue;
+      _review = LibraryTransferRaycastReview(plan: plan, selection: requested);
       _pendingRaycast = plan;
       _emit(_review!);
-    });
+      return;
+    }
   }
 
   /// Moves a reviewed operation to the backup or confirm step.
@@ -277,6 +301,14 @@ final class LibraryTransferController {
         } else if (raycast != null) {
           await _applyRaycast(raycast);
         }
+      } on StaleSnapshotLibraryFailure {
+        // The transactional expectedCurrent check is the last staleness
+        // bound; like the observed movement it demands a new review and copy,
+        // so the old preview must not be offered again.
+        if (!_isDisposed) {
+          _clearWorking();
+          _emit(const LibraryTransferStale());
+        }
       } on LibraryFailure catch (failure) {
         if (!_isDisposed) {
           _emit(LibraryTransferFailed(libraryFailure: failure));
@@ -330,7 +362,23 @@ final class LibraryTransferController {
       _expected = expected;
       final review = await _buildReview(source, expected);
       if (_isDisposed) return;
+      // The observer ignores publications until _expected is set, and the
+      // repository can publish after completing the read but before this
+      // method resumes. Confirming the captured state closes that window
+      // before the review is offered.
+      final confirmed = await _repository.getSnapshot();
+      if (_isDisposed) return;
+      final unchanged =
+          identical(confirmed, expected) ||
+          await _snapshotsMatch(confirmed, expected);
+      if (_isDisposed) return;
+      if (!unchanged) {
+        _clearWorking();
+        _emit(const LibraryTransferStale());
+        return;
+      }
       _raycastSource = source is RaycastDocument ? source : null;
+      _selection = null;
       _review = review;
       _emit(review);
     } on DocumentFailure catch (failure) {
@@ -422,12 +470,17 @@ final class LibraryTransferController {
   }
 
   /// Invalidates previews when storage observation fails.
+  ///
+  /// Like a snapshot publication, an observation failure only matters while
+  /// a review depends on the captured snapshot; it must not overwrite an
+  /// applied result, a prepared export, or the application's own transaction.
   void _handleSnapshotError(Object error, StackTrace stack) {
     if (_isDisposed) return;
     if (error is! LibraryFailure) {
       Zone.current.handleUncaughtError(error, stack);
       return;
     }
+    if (_maintenanceActive || _expected == null) return;
     if (_busy) {
       _snapshotFailure = error;
       return;
@@ -439,6 +492,7 @@ final class LibraryTransferController {
   void _clearWorking() {
     _expected = null;
     _raycastSource = null;
+    _selection = null;
     _preparedBytes = null;
     _preparedKind = null;
     _review = null;
@@ -467,15 +521,21 @@ final class LibraryTransferController {
     } finally {
       _busy = false;
       final failure = _snapshotFailure;
+      final stale = _staleDuringOperation;
       _snapshotFailure = null;
-      if (failure != null) {
-        _clearWorking();
-        _emit(LibraryTransferFailed(libraryFailure: failure));
-      } else if (_staleDuringOperation) {
-        _clearWorking();
-        _emit(const LibraryTransferStale());
-      }
       _staleDuringOperation = false;
+      // A deferred invalidation applies only while the operation still holds
+      // a review; an operation that already published its result or cleared
+      // its working data keeps that outcome.
+      if (_expected != null) {
+        if (failure != null) {
+          _clearWorking();
+          _emit(LibraryTransferFailed(libraryFailure: failure));
+        } else if (stale) {
+          _clearWorking();
+          _emit(const LibraryTransferStale());
+        }
+      }
       done.complete();
       _operationDone = null;
     }

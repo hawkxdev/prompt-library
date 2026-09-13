@@ -237,6 +237,91 @@ void main() {
       expect(review.plan.rows.last.outcome, ImportRowOutcome.userSkipped);
     });
 
+    test(
+      'keeps the latest selection when choices arrive during a rebuild',
+      () async {
+        await _startRaycastImport(repository, files, controller);
+
+        final first = controller.updateSelection(
+          RaycastSelection(excludedIndices: {0}),
+        );
+        final second = controller.updateSelection(
+          RaycastSelection(excludedIndices: {0, 1}),
+        );
+        await Future.wait([first, second]);
+        await controller.settled;
+
+        final review = controller.state as LibraryTransferRaycastReview;
+        expect(review.plan.rows.map((row) => row.outcome), [
+          ImportRowOutcome.userSkipped,
+          ImportRowOutcome.userSkipped,
+        ]);
+        expect(review.selection!.excludedIndices, {0, 1});
+      },
+    );
+
+    test(
+      'combines unknown-field consent and add-as-new sent in quick succession',
+      () async {
+        files.pickResult = DocumentPicked(
+          fileName: 'snippets.json',
+          bytes: _bytes(
+            '[{"name":"Alpha","text":"one"},'
+            '{"name":" Alpha ","text":"two","folder":"work"}]',
+          ),
+        );
+        await controller.startImport();
+
+        final first = controller.updateSelection(
+          RaycastSelection(acceptedUnknownFieldIndices: {1}),
+        );
+        final second = controller.updateSelection(
+          RaycastSelection(
+            acceptedUnknownFieldIndices: {1},
+            addAsNewIndices: {1},
+          ),
+        );
+        await Future.wait([first, second]);
+        await controller.settled;
+
+        final review = controller.state as LibraryTransferRaycastReview;
+        expect(review.plan.rows.last.outcome, ImportRowOutcome.selected);
+        expect(review.plan.predictedAdded, 2);
+      },
+    );
+
+    test('a publication racing the review read forces a new review', () async {
+      repository.emit(LibrarySnapshot(entries: [testEntry('kept-1')]));
+      await pumpEventQueue();
+      files.pickResult = DocumentPicked(
+        fileName: 'library.json',
+        bytes: LibraryJsonCodec().encode(
+          LibraryDocument(
+            snapshot: LibrarySnapshot(
+              entries: [testEntry('kept-1'), testEntry('incoming-1')],
+            ),
+            exportedAt: DateTime.utc(2026, 9, 1),
+          ),
+        ),
+      );
+      repository.onNextRead = () => repository.emit(
+        LibrarySnapshot(
+          entries: [
+            testEntry('kept-1', lastCopiedAt: DateTime.utc(2026, 9, 10)),
+          ],
+        ),
+      );
+
+      await controller.startImport();
+      await controller.settled;
+
+      expect(controller.state, const LibraryTransferStale());
+      await controller.continueFromReview();
+      files.exportResult = const DocumentSaved(path: '/tmp/backup.json');
+      await controller.createBackupCopy();
+      expect(files.calls, ['pickDocument']);
+    });
+
     test('goes stale when the library changes after the review', () async {
       await _startRaycastImport(repository, files, controller);
       expect(controller.state, isA<LibraryTransferRaycastReview>());
@@ -488,6 +573,63 @@ void main() {
       },
     );
 
+    test('transactional staleness in restore requires a new review', () async {
+      final expected = await _startRestoreImport(repository, files, controller);
+      await _verifyThroughBackup(files, controller, expected);
+      repository.nextFailure = const LibraryFailure.staleSnapshot();
+
+      await controller.apply();
+
+      expect(controller.state, const LibraryTransferStale());
+      expect(controller.canResumeReview, isFalse);
+      expect(library.state.isUnderMaintenance, isFalse);
+      controller.resumeReview();
+      await controller.continueFromReview();
+      await controller.apply();
+      expect(controller.state, const LibraryTransferStale());
+      expect(
+        repository.calls.where((call) => call == 'restoreSnapshot'),
+        hasLength(1),
+      );
+    });
+
+    test(
+      'transactional staleness in Raycast import requires a new review',
+      () async {
+        await _startRaycastImport(repository, files, controller);
+        await _verifyThroughBackup(
+          files,
+          controller,
+          await repository.getSnapshot(),
+        );
+        expect(controller.state, isA<LibraryTransferBackupVerified>());
+        repository.nextFailure = const LibraryFailure.staleSnapshot();
+
+        await controller.apply();
+
+        expect(controller.state, const LibraryTransferStale());
+        expect(controller.canResumeReview, isFalse);
+        expect(library.state.isUnderMaintenance, isFalse);
+        await _startRaycastImport(repository, files, controller);
+        expect(controller.state, isA<LibraryTransferRaycastReview>());
+      },
+    );
+
+    test('a transaction failure keeps the still-valid review', () async {
+      final expected = await _startRestoreImport(repository, files, controller);
+      await _verifyThroughBackup(files, controller, expected);
+      repository.nextFailure = const LibraryFailure.databaseFailure(
+        code: LibraryDatabaseFailureCode.transactionFailed,
+      );
+
+      await controller.apply();
+
+      expect(controller.state, isA<LibraryTransferFailed>());
+      expect(controller.canResumeReview, isTrue);
+      controller.resumeReview();
+      expect(controller.state, isA<LibraryTransferRestoreReview>());
+    });
+
     test('staleness before apply rejects the application', () async {
       await _startRestoreImport(repository, files, controller);
       await controller.continueFromReview();
@@ -644,6 +786,129 @@ void main() {
           DocumentFailureCode.limitExceeded,
         ),
       );
+    });
+
+    test(
+      'a snapshot stream error during apply keeps the committed result',
+      () async {
+        final expected = await _startRestoreImport(
+          repository,
+          files,
+          controller,
+        );
+        await _verifyThroughBackup(files, controller, expected);
+        final gate = Completer<void>();
+        repository.nextMutationGate = gate;
+
+        final applying = controller.apply();
+        await pumpEventQueue();
+        expect(repository.calls, contains('restoreSnapshot'));
+        repository.emitFailure(
+          const LibraryFailure.databaseFailure(
+            code: LibraryDatabaseFailureCode.readFailed,
+          ),
+        );
+        gate.complete();
+        await applying;
+        await pumpEventQueue();
+
+        expect(controller.state, isA<LibraryTransferRestoreDone>());
+      },
+    );
+
+    test(
+      'a stream error while apply waits for maintenance keeps the result',
+      () async {
+        final expected = await _startRestoreImport(
+          repository,
+          files,
+          controller,
+        );
+        await _verifyThroughBackup(files, controller, expected);
+        final gate = Completer<void>();
+        repository.nextMutationGate = gate;
+        repository.nextFailure = const LibraryFailure.databaseFailure(
+          code: LibraryDatabaseFailureCode.transactionFailed,
+        );
+        final favorite = library.setFavorite('kept-1', isFavorite: true);
+        final favoriteOutcome = expectLater(
+          favorite,
+          throwsA(isA<LibraryFailure>()),
+        );
+        await pumpEventQueue();
+
+        // The library already refuses new mutations, but apply still awaits
+        // the admitted one: the transfer operation is busy and holds its
+        // review while its own maintenance flag is not yet set.
+        final applying = controller.apply();
+        await pumpEventQueue();
+        expect(library.state.isUnderMaintenance, isTrue);
+        repository.emitFailure(
+          const LibraryFailure.databaseFailure(
+            code: LibraryDatabaseFailureCode.readFailed,
+          ),
+        );
+        gate.complete();
+        await favoriteOutcome;
+        await applying;
+        await pumpEventQueue();
+
+        expect(repository.calls, contains('restoreSnapshot'));
+        expect(controller.state, isA<LibraryTransferRestoreDone>());
+      },
+    );
+
+    test('a snapshot stream error after the result keeps it', () async {
+      final expected = await _startRestoreImport(repository, files, controller);
+      await _verifyThroughBackup(files, controller, expected);
+      await controller.apply();
+      expect(controller.state, isA<LibraryTransferRestoreDone>());
+
+      repository.emitFailure(
+        const LibraryFailure.databaseFailure(
+          code: LibraryDatabaseFailureCode.readFailed,
+        ),
+      );
+      await pumpEventQueue();
+
+      expect(controller.state, isA<LibraryTransferRestoreDone>());
+    });
+
+    test('a snapshot stream error keeps a prepared export', () async {
+      await controller.prepareExport(DocumentExportKind.json);
+
+      repository.emitFailure(
+        const LibraryFailure.databaseFailure(
+          code: LibraryDatabaseFailureCode.readFailed,
+        ),
+      );
+      await pumpEventQueue();
+
+      expect(controller.state, isA<LibraryTransferExportReady>());
+    });
+
+    test('an equal but new snapshot instance confirms the review', () async {
+      repository.emit(LibrarySnapshot(entries: [testEntry('kept-1')]));
+      await pumpEventQueue();
+      files.pickResult = DocumentPicked(
+        fileName: 'library.json',
+        bytes: LibraryJsonCodec().encode(
+          LibraryDocument(
+            snapshot: LibrarySnapshot(
+              entries: [testEntry('kept-1'), testEntry('incoming-1')],
+            ),
+            exportedAt: DateTime.utc(2026, 9, 1),
+          ),
+        ),
+      );
+      // A real repository builds a new snapshot object on every read.
+      repository.onNextRead = () =>
+          repository.emit(LibrarySnapshot(entries: [testEntry('kept-1')]));
+
+      await controller.startImport();
+      await controller.settled;
+
+      expect(controller.state, isA<LibraryTransferRestoreReview>());
     });
 
     test('snapshot errors invalidate an approved operation', () async {

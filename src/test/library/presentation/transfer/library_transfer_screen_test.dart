@@ -4,6 +4,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:prompt_library/src/library/models/entry.dart';
 import 'package:prompt_library/src/library/models/library_failure.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
@@ -167,6 +168,109 @@ void main() {
     expect(find.textContaining('new body'), findsOneWidget);
   });
 
+  testWidgets('modified entities show every field before and after', (
+    tester,
+  ) async {
+    Entry entry(String body) => Entry(
+      id: 'kept',
+      title: 'Title',
+      body: body,
+      keyword: '  alias  ',
+      categoryId: 'c1',
+      tagIds: const ['t1'],
+      isFavorite: true,
+      isArchived: true,
+      createdAt: DateTime.utc(2026, 1, 1),
+      updatedAt: DateTime.utc(2026, 2, 1),
+      lastCopiedAt: DateTime.utc(2026, 3, 1),
+    );
+    repository.emit(
+      LibrarySnapshot(
+        entries: [entry('old body')],
+        categories: [testCategory('c1', 'Work', sortOrder: 7)],
+        tags: [testTag('t1', 'Tag')],
+      ),
+    );
+    await tester.runAsync(() => transfer.settled);
+    files.pickResult = DocumentPicked(
+      fileName: 'replacement.json',
+      bytes: LibraryJsonCodec().encode(
+        LibraryDocument(
+          snapshot: LibrarySnapshot(
+            entries: [entry('new body')],
+            categories: [testCategory('c1', 'Work 2', sortOrder: 7)],
+            tags: [testTag('t1', 'Tag 2')],
+          ),
+          exportedAt: DateTime.utc(2026),
+        ),
+      ),
+    );
+    await tester.runAsync(() => transfer.startImport());
+    await pumpScreen(tester);
+
+    await tester.tap(find.text('Entry modified: kept'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('body (changed)'), findsOneWidget);
+    for (final field in [
+      'title',
+      'keyword',
+      'categoryId',
+      'tagIds',
+      'isFavorite',
+      'isArchived',
+      'createdAt',
+      'updatedAt',
+      'lastCopiedAt',
+    ]) {
+      expect(find.text(field), findsOneWidget, reason: field);
+    }
+    expect(find.text('Before: "Title"'), findsOneWidget);
+    expect(find.text('After: "Title"'), findsOneWidget);
+    expect(find.text('Before: "  alias  "'), findsOneWidget);
+    expect(find.text('After: "  alias  "'), findsOneWidget);
+    expect(find.text('Before: "c1"'), findsOneWidget);
+    expect(find.text('After: ["t1"]'), findsOneWidget);
+    expect(find.text('Before: true'), findsNWidgets(2));
+    expect(find.textContaining('2026-02-01'), findsNWidgets(2));
+    expect(find.textContaining('2026-03-01'), findsNWidgets(2));
+    expect(find.text('Before: "old body"'), findsOneWidget);
+    expect(find.text('After: "new body"'), findsOneWidget);
+
+    await tester.tap(find.text('Entry modified: kept'));
+    await tester.pumpAndSettle();
+    final list = find
+        .descendant(
+          of: find.byKey(const Key('transfer-restore-differences')),
+          matching: find.byType(Scrollable),
+        )
+        .first;
+    await tester.scrollUntilVisible(
+      find.text('Category modified: c1'),
+      100,
+      scrollable: list,
+    );
+    await tester.tap(find.text('Category modified: c1'));
+    await tester.pumpAndSettle();
+    expect(find.text('name (changed)'), findsOneWidget);
+    expect(find.text('sortOrder'), findsOneWidget);
+    expect(find.text('After: 7'), findsOneWidget);
+
+    await tester.tap(find.text('Category modified: c1'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Tag modified: t1'),
+      100,
+      scrollable: list,
+    );
+    await tester.tap(find.text('Tag modified: t1'));
+    await tester.pumpAndSettle();
+    expect(find.text('name (changed)'), findsOneWidget);
+    expect(find.text('id'), findsOneWidget);
+    expect(find.text('Before: "t1"'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'Raycast conflict and unknown fields can be accepted explicitly',
     (tester) async {
@@ -209,6 +313,86 @@ void main() {
       expect(find.textContaining('Will add: 2'), findsOneWidget);
     },
   );
+
+  testWidgets('rapid independent Raycast exclusions keep every choice', (
+    tester,
+  ) async {
+    files.pickResult = DocumentPicked(
+      fileName: 'snippets.json',
+      bytes: _bytes('[{"name":"A","text":"a"},{"name":"B","text":"b"}]'),
+    );
+    await tester.runAsync(() => transfer.startImport());
+    await pumpScreen(tester);
+
+    await tester.runAsync(() async {
+      await tester.tap(find.byKey(const Key('transfer-exclude-0')));
+      // Only microtasks separate the taps, so the worker isolate cannot
+      // deliver the first recalculation before the second choice is made.
+      expect(
+        (transfer.state as LibraryTransferRaycastReview).selection,
+        isNull,
+        reason: 'the second tap must precede the first published review',
+      );
+      await tester.tap(find.byKey(const Key('transfer-exclude-1')));
+      await transfer.settled;
+      await transfer.settled;
+    });
+    await tester.pump();
+
+    final review = transfer.state as LibraryTransferRaycastReview;
+    expect(review.plan.rows.map((row) => row.outcome), [
+      ImportRowOutcome.userSkipped,
+      ImportRowOutcome.userSkipped,
+    ]);
+    expect(review.selection!.excludedIndices, {0, 1});
+    expect(find.textContaining('Will add: 0'), findsOneWidget);
+  });
+
+  testWidgets('a repeated decision on the same Raycast row wins', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    files.pickResult = DocumentPicked(
+      fileName: 'snippets.json',
+      bytes: _bytes(
+        '[{"name":"A","text":"a","folder":"x"},'
+        '{"name":"B","text":"b"},'
+        '{"name":" B ","text":"c"}]',
+      ),
+    );
+    await tester.runAsync(() => transfer.startImport());
+    await pumpScreen(tester);
+
+    await tester.runAsync(() async {
+      await tester.tap(find.byKey(const Key('transfer-exclude-1')));
+      // Every tap below lands before the first recalculation publishes.
+      expect(
+        (transfer.state as LibraryTransferRaycastReview).selection,
+        isNull,
+        reason: 'the repeated taps must precede the first published review',
+      );
+      await tester.tap(find.byKey(const Key('transfer-exclude-1')));
+      await tester.tap(find.byKey(const Key('transfer-unknown-0')));
+      await tester.tap(find.byKey(const Key('transfer-unknown-0')));
+      await tester.tap(find.byKey(const Key('transfer-add-new-2')));
+      await tester.tap(find.byKey(const Key('transfer-add-new-2')));
+      await transfer.settled;
+    });
+    await tester.pump();
+
+    final review = transfer.state as LibraryTransferRaycastReview;
+    expect(review.selection!.excludedIndices, isEmpty);
+    expect(review.selection!.acceptedUnknownFieldIndices, isEmpty);
+    expect(review.selection!.addAsNewIndices, isEmpty);
+    expect(review.plan.rows.map((row) => row.outcome), [
+      ImportRowOutcome.unsupportedFields,
+      ImportRowOutcome.selected,
+      ImportRowOutcome.conflict,
+    ]);
+  });
 
   testWidgets('Raycast choices do not survive into a different file', (
     tester,
@@ -440,20 +624,36 @@ void main() {
       await tester.runAsync(() => transfer.startImport());
       await pumpScreen(tester);
 
-      expect(tester.takeException(), isNull);
-      await tester.scrollUntilVisible(
-        find.textContaining('zz-incoming-2000'),
-        5000,
-        maxScrolls: 100,
-        scrollable: find
-            .descendant(
-              of: find.byKey(const Key('transfer-restore-differences')),
-              matching: find.byType(Scrollable),
-            )
-            .first,
+      final plan = (transfer.state as LibraryTransferRestoreReview).plan;
+      expect(
+        plan.entries.where((row) => row.kind == EntityChangeKind.removed),
+        hasLength(2000),
       );
       expect(tester.takeException(), isNull);
-      expect(find.textContaining('zz-incoming-2000'), findsOneWidget);
+      // Identifiers sort as strings, so kept-0 opens the list and kept-999 is
+      // the last removal before the single addition.
+      expect(find.text('Entry removed: kept-0'), findsOneWidget);
+      final differences = find
+          .descendant(
+            of: find.byKey(const Key('transfer-restore-differences')),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('transfer-restore-continue')),
+        5000,
+        maxScrolls: 100,
+        scrollable: differences,
+      );
+      expect(tester.takeException(), isNull);
+      expect(find.text('Entry removed: kept-999'), findsOneWidget);
+      expect(find.text('Entry added: zz-incoming-2000'), findsOneWidget);
+      expect(
+        tester.getRect(find.text('Entry removed: kept-999')).top,
+        lessThan(
+          tester.getRect(find.text('Entry added: zz-incoming-2000')).top,
+        ),
+      );
     });
 
     testWidgets('survives large text scales without layout exceptions', (

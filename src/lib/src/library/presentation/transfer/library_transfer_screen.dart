@@ -61,9 +61,12 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
     });
   }
 
-  /// Sends choices belonging only to the current source.
-  void _choose(RaycastSelection selection) {
-    widget.transfer.updateSelection(selection);
+  /// Merges one row choice into the latest request for the current source.
+  ///
+  /// The latest request is read at tap time, so a second choice made before
+  /// the first recalculation publishes keeps both choices.
+  void _choose(RaycastSelection Function(RaycastSelection latest) change) {
+    widget.transfer.updateSelection(change(widget.transfer.raycastSelection));
   }
 
   @override
@@ -213,24 +216,33 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
           return const Text('The document matches the current library.');
         }
         final row = differences[index];
+        final difference = row.$2;
+        final before = difference.before;
+        final after = difference.after;
         return ExpansionTile(
           key: ValueKey(row.$1),
           title: Text(row.$1),
-          subtitle: Text(row.$2.fields.join(', ')),
+          subtitle: Text(difference.fields.join(', ')),
           children: [
-            for (final field in row.$2.fields)
+            // Every field of the entity is shown so the complete incoming and
+            // outgoing state can be checked; a modification marks only the
+            // fields whose values actually differ.
+            for (final field in (before ?? after)!.keys)
               Padding(
                 padding: const EdgeInsets.all(12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text(field),
-                    SelectableText(
-                      'Before: ${jsonEncode(row.$2.before?[field])}',
+                    _fieldLabel(
+                      field,
+                      changed:
+                          difference.kind == EntityChangeKind.modified &&
+                          difference.fields.contains(field),
                     ),
-                    SelectableText(
-                      'After: ${jsonEncode(row.$2.after?[field])}',
-                    ),
+                    if (before != null)
+                      SelectableText('Before: ${jsonEncode(before[field])}'),
+                    if (after != null)
+                      SelectableText('After: ${jsonEncode(after[field])}'),
                   ],
                 ),
               ),
@@ -238,6 +250,18 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
         );
       },
       continueKey: const Key('transfer-restore-continue'),
+    );
+  }
+
+  /// Names one entity field; a changed field is marked in text, not color.
+  Widget _fieldLabel(String field, {required bool changed}) {
+    if (!changed) return Text(field);
+    return Text(
+      '$field (changed)',
+      style: TextStyle(
+        fontWeight: FontWeight.bold,
+        color: Theme.of(context).colorScheme.error,
+      ),
     );
   }
 
@@ -328,18 +352,17 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
             key: Key('transfer-exclude-$index'),
             dense: true,
             value: !selection.excludedIndices.contains(index),
+            // Each tap toggles the latest requested choice. The checkbox value
+            // comes from the last published review, so a second tap before
+            // that review arrives would otherwise repeat the first decision.
             onChanged: snippet == null
                 ? null
-                : (included) => _choose(
-                    RaycastSelection(
-                      excludedIndices: _withChoice(
-                        selection.excludedIndices,
-                        index,
-                        included != true,
-                      ),
-                      addAsNewIndices: selection.addAsNewIndices,
+                : (_) => _choose(
+                    (latest) => RaycastSelection(
+                      excludedIndices: _toggled(latest.excludedIndices, index),
+                      addAsNewIndices: latest.addAsNewIndices,
                       acceptedUnknownFieldIndices:
-                          selection.acceptedUnknownFieldIndices,
+                          latest.acceptedUnknownFieldIndices,
                     ),
                   ),
             title: Text(snippet?.title ?? 'Invalid row ${index + 1}'),
@@ -364,14 +387,13 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
               value: selection.acceptedUnknownFieldIndices.contains(index),
               onChanged: snippet == null
                   ? null
-                  : (accepted) => _choose(
-                      RaycastSelection(
-                        excludedIndices: selection.excludedIndices,
-                        addAsNewIndices: selection.addAsNewIndices,
-                        acceptedUnknownFieldIndices: _withChoice(
-                          selection.acceptedUnknownFieldIndices,
+                  : (_) => _choose(
+                      (latest) => RaycastSelection(
+                        excludedIndices: latest.excludedIndices,
+                        addAsNewIndices: latest.addAsNewIndices,
+                        acceptedUnknownFieldIndices: _toggled(
+                          latest.acceptedUnknownFieldIndices,
                           index,
-                          accepted == true,
                         ),
                       ),
                     ),
@@ -384,16 +406,12 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
                 'Add as a separate entry without replacing existing entries',
               ),
               value: selection.addAsNewIndices.contains(index),
-              onChanged: (accepted) => _choose(
-                RaycastSelection(
-                  excludedIndices: selection.excludedIndices,
-                  addAsNewIndices: _withChoice(
-                    selection.addAsNewIndices,
-                    index,
-                    accepted == true,
-                  ),
+              onChanged: (_) => _choose(
+                (latest) => RaycastSelection(
+                  excludedIndices: latest.excludedIndices,
+                  addAsNewIndices: _toggled(latest.addAsNewIndices, index),
                   acceptedUnknownFieldIndices:
-                      selection.acceptedUnknownFieldIndices,
+                      latest.acceptedUnknownFieldIndices,
                 ),
               ),
             ),
@@ -411,11 +429,11 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
     );
   }
 
-  /// Builds one immutable row choice.
-  Set<int> _withChoice(Set<int> values, int index, bool selected) {
-    return {...values}
-      ..removeWhere((value) => value == index && !selected)
-      ..addAll(selected ? [index] : const []);
+  /// Flips one row index in a copy of the requested choices.
+  Set<int> _toggled(Set<int> values, int index) {
+    final next = {...values};
+    if (!next.remove(index)) next.add(index);
+    return next;
   }
 
   /// Names each exclusive disposition for the user.
