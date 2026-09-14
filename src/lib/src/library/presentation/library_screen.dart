@@ -97,6 +97,7 @@ final class _LibraryScreenState extends State<LibraryScreen> {
       clipboard: widget.clipboard,
       controller: widget.controller,
     );
+    if (outcome == LibraryCopyOutcome.notAdmitted) return;
     if (outcome == LibraryCopyOutcome.clipboardFailure) {
       if (mounted) _showMessage('The prompt could not be copied.');
       return;

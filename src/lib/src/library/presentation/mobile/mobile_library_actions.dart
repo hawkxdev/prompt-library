@@ -37,7 +37,7 @@ final class MobileLibraryActions {
   /// Best-effort tactile feedback boundary.
   final LibraryHaptics haptics;
 
-  final Map<String, Future<MobileCopyOutcome>> _inFlight = {};
+  final Map<String, Future<MobileCopyOutcome?>> _inFlight = {};
   final Map<String, Future<LibraryShareOutcome>> _sharesInFlight = {};
   final Map<(String, LibraryMutationKind), Future<void>> _mutationsInFlight =
       {};
@@ -87,13 +87,19 @@ final class MobileLibraryActions {
   }
 
   /// Executes one guarded copy cycle.
-  Future<MobileCopyOutcome> _runCycle(Entry entry) async {
+  ///
+  /// A refused admission reports the absence of an outcome, so no feedback
+  /// is presented for a cycle the controller did not accept.
+  Future<MobileCopyOutcome?> _runCycle(Entry entry) async {
     try {
       final outcome = await copyLibraryEntry(
         entry: entry,
         clipboard: clipboard,
         controller: controller,
       );
+      if (outcome == LibraryCopyOutcome.notAdmitted) {
+        return null;
+      }
       if (outcome == LibraryCopyOutcome.clipboardFailure) {
         return MobileCopyOutcome.clipboardFailure;
       }

@@ -1,7 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:prompt_library/src/library/data/library_repository.dart';
+import 'package:prompt_library/src/library/models/category.dart';
+import 'package:prompt_library/src/library/models/entry.dart';
+import 'package:prompt_library/src/library/models/entry_input.dart';
+import 'package:prompt_library/src/library/models/entry_update.dart';
 import 'package:prompt_library/src/library/models/library_failure.dart';
+import 'package:prompt_library/src/library/models/tag.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
@@ -506,6 +512,246 @@ void main() {
     expect(done.isCompleted, isTrue);
     expect(controller.state.mode, QuickPanelMode.quick);
   });
+
+  test(
+    'copy cycle admitted before maintenance records metadata under the barrier',
+    () async {
+      const body = 'exact body';
+      repository.emit(
+        LibrarySnapshot(entries: [testEntry('entry-1', body: body)]),
+      );
+      await controller.initialize(defaultSpec);
+      port.emitQuickModeRequest();
+      final metadataGate = Completer<void>();
+      repository.nextMarkCopiedGate = metadataGate;
+      clipboard.gate = Completer<void>();
+
+      final copy = controller.copySelected();
+      await _flush();
+      expect(clipboard.values, [body]);
+
+      final barrier = library.beginMaintenance();
+      var resolved = false;
+      unawaited(barrier.then((_) => resolved = true));
+
+      clipboard.gate!.complete();
+      await _flush();
+      expect(repository.calls, ['markCopied:entry-1']);
+      expect(resolved, isFalse, reason: 'barrier waits for the metadata write');
+
+      metadataGate.complete();
+      await _flush();
+      expect(resolved, isTrue);
+      expect(controller.state.copied, isTrue);
+
+      delay.complete();
+      await copy;
+      expect(controller.state.pendingAction, isNull);
+      expect(controller.state.mode, QuickPanelMode.fullLibrary);
+
+      library.endMaintenance();
+      final second = controller.copySelected();
+      await _flush();
+      delay.complete();
+      await second;
+      expect(
+        repository.calls.where((call) => call == 'markCopied:entry-1'),
+        hasLength(2),
+      );
+    },
+  );
+
+  test('refuses a new copy under maintenance without flags', () async {
+    const body = 'exact body';
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('entry-1', body: body)]),
+    );
+    await controller.initialize(defaultSpec);
+    port.emitQuickModeRequest();
+    await library.beginMaintenance();
+
+    final copy = controller.copySelected();
+    await _flush();
+
+    expect(controller.state.pendingAction, isNull);
+    expect(controller.state.copied, isFalse);
+    expect(controller.state.copyFailed, isFalse);
+    expect(clipboard.values, isEmpty);
+    expect(repository.calls, isEmpty);
+
+    library.endMaintenance();
+    delay.complete();
+    await copy;
+
+    final second = controller.copySelected();
+    await _flush();
+    expect(clipboard.values, [body]);
+    delay.complete();
+    await second;
+  });
+
+  test('unexpected metadata failure clears copy and escapes', () async {
+    final failingRepository = _ThrowingMetadataRepository();
+    final failingLibrary = LibraryController(repository: failingRepository);
+    final failingController = QuickPanelController(
+      libraryController: failingLibrary,
+      clipboard: clipboard,
+      port: port,
+      delay: delay,
+    );
+    failingRepository.emit(LibrarySnapshot(entries: [testEntry('entry-1')]));
+    await pumpEventQueue();
+    await failingController.initialize(defaultSpec);
+
+    await expectLater(failingController.copySelected(), throwsStateError);
+    expect(failingController.state.pendingAction, isNull);
+    expect(failingController.state.copied, isFalse);
+    expect(failingController.state.copyFailed, isFalse);
+
+    await failingController.dispose();
+    await failingLibrary.dispose();
+    await failingRepository.close();
+  });
+
+  test('quick request under maintenance restores the full library and keeps '
+      'the generation', () async {
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('entry-1', title: 'Alpha')]),
+    );
+    await controller.initialize(defaultSpec);
+    library.updateSearchQuery('Alpha');
+    await _flush();
+    await library.beginMaintenance();
+
+    port.emitQuickModeRequest(generation: 5);
+    await _flush();
+
+    expect(controller.state.mode, QuickPanelMode.fullLibrary);
+    expect(library.state.filter.searchQuery, 'Alpha');
+    expect(port.showCalls, 1);
+
+    library.endMaintenance();
+    port.emitQuickModeRequest(generation: 6);
+    await _flush();
+    expect(controller.state.mode, QuickPanelMode.quick);
+
+    port.emitFullLibraryRequest(generation: 7);
+    await _flush();
+    port.emitQuickModeRequest(generation: 6);
+    await _flush();
+    expect(controller.state.mode, QuickPanelMode.fullLibrary);
+  });
+
+  test(
+    'queued quick request is refused when maintenance is still active',
+    () async {
+      repository.emit(
+        LibrarySnapshot(entries: [testEntry('entry-1', body: 'exact body')]),
+      );
+      await controller.initialize(defaultSpec);
+      port.emitQuickModeRequest();
+      clipboard.gate = Completer<void>();
+
+      final copy = controller.copySelected();
+      await _flush();
+      final barrier = library.beginMaintenance();
+
+      port.emitQuickModeRequest(generation: 9);
+      clipboard.gate!.complete();
+      await _flush();
+      repository.nextMarkCopiedGate?.complete();
+      delay.complete();
+      await copy;
+      await barrier;
+      await _flush();
+
+      expect(controller.state.mode, QuickPanelMode.fullLibrary);
+      expect(port.showCalls, 1);
+      library.endMaintenance();
+    },
+  );
+}
+
+/// Repository whose metadata write fails unexpectedly.
+final class _ThrowingMetadataRepository implements LibraryRepository {
+  final StreamController<LibrarySnapshot> _snapshots =
+      StreamController<LibrarySnapshot>.broadcast();
+
+  /// Emits a complete snapshot.
+  void emit(LibrarySnapshot snapshot) {
+    _snapshots.add(snapshot);
+  }
+
+  /// Closes stream resources.
+  Future<void> close() => _snapshots.close();
+
+  @override
+  Stream<LibrarySnapshot> watchSnapshot() => _snapshots.stream;
+
+  @override
+  Future<void> markCopied(String id) async {
+    throw StateError('metadata adapter failed');
+  }
+
+  @override
+  Future<LibrarySnapshot> getSnapshot() async => const LibrarySnapshot.empty();
+
+  @override
+  Future<LibrarySnapshot> restoreSnapshot({
+    required LibrarySnapshot expectedCurrent,
+    required LibrarySnapshot replacement,
+  }) async => const LibrarySnapshot.empty();
+
+  @override
+  Future<List<Entry>> addRaycastEntries({
+    required LibrarySnapshot expectedCurrent,
+    required List<RaycastEntryDraft> drafts,
+  }) async => const <Entry>[];
+
+  @override
+  Future<Entry> createEntry(EntryInput input) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<Entry> updateEntry(String id, EntryInput input) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<Entry> updateEntryDetails(String id, EntryUpdate update) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> deleteEntry(String id) async {}
+
+  @override
+  Future<void> setFavorite(String id, {required bool isFavorite}) async {}
+
+  @override
+  Future<void> setArchived(String id, {required bool isArchived}) async {}
+
+  @override
+  Future<Category> createCategory(String name) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<Category> renameCategory(String id, String newName) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> deleteCategory(String id) async {}
+
+  @override
+  Future<void> reorderCategories(List<String> orderedCategoryIds) async {}
+
+  @override
+  Future<Tag> createTag(String name) async => throw UnimplementedError();
+
+  @override
+  Future<Tag> renameTag(String id, String newName) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> deleteTag(String id) async {}
 }
 
 Future<void> _flush() async {

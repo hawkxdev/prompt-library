@@ -161,6 +161,65 @@ void main() {
     expect(repository.calls, isNot(contains('markCopied:one')));
   });
 
+  testWidgets('copy under maintenance writes nothing and shows no message', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', body: 'exact body')]),
+    );
+    await pumpState(tester);
+    await controller.beginMaintenance();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Copy'));
+    await pumpState(tester);
+
+    expect(clipboard.values, isEmpty);
+    expect(repository.calls, isEmpty);
+    expect(find.text('Copied'), findsNothing);
+
+    controller.endMaintenance();
+    await tester.tap(find.widgetWithText(FilledButton, 'Copy'));
+    await pumpState(tester);
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(clipboard.values, ['exact body']);
+    expect(find.text('Copied'), findsOneWidget);
+    await disposeApp(tester);
+  });
+
+  testWidgets('cycle started before maintenance completes under the barrier', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', body: 'exact body')]),
+    );
+    await pumpState(tester);
+    final gate = Completer<void>();
+    clipboard.gate = gate;
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Copy'));
+    await pumpState(tester);
+    expect(clipboard.values, ['exact body']);
+    expect(find.text('Copied'), findsNothing);
+
+    final barrier = controller.beginMaintenance();
+    var resolved = false;
+    unawaited(barrier.then((_) => resolved = true));
+
+    clipboard.gate = null;
+    gate.complete();
+    await pumpState(tester);
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(repository.calls, contains('markCopied:one'));
+    expect(find.text('Copied'), findsOneWidget);
+    await barrier;
+    expect(resolved, isTrue);
+    await disposeApp(tester);
+  });
+
   testWidgets('reveals selection moved to the list end', (tester) async {
     tester.view.physicalSize = const Size(1200, 500);
     tester.view.devicePixelRatio = 1;

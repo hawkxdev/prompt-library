@@ -222,6 +222,52 @@ void main() {
         expect(throwingActions.isSharePending('one'), isFalse);
       },
     );
+
+    test(
+      'cycle admitted before maintenance records metadata before the barrier',
+      () async {
+        final entry = testEntry('one', body: 'exact body');
+        repository.emit(LibrarySnapshot(entries: [entry]));
+        final gate = Completer<void>();
+        clipboard.gate = gate;
+
+        final first = actions.copyEntry(entry);
+        final joined = actions.copyEntry(entry);
+        expect(actions.isPending('one'), isTrue);
+
+        final barrier = controller.beginMaintenance();
+        var resolved = false;
+        unawaited(barrier.then((_) => resolved = true));
+
+        clipboard.gate = null;
+        gate.complete();
+        expect(await first, MobileCopyOutcome.copied);
+        expect(await joined, isNull);
+        await barrier;
+        expect(resolved, isTrue);
+        expect(markCopiedCalls('one'), 1);
+        expect(haptics.calls, 1);
+        controller.endMaintenance();
+      },
+    );
+
+    test('refuses a new copy under maintenance without haptic', () async {
+      final entry = testEntry('one', body: 'exact body');
+      repository.emit(LibrarySnapshot(entries: [entry]));
+      await controller.beginMaintenance();
+
+      expect(await actions.copyEntry(entry), isNull);
+
+      expect(clipboard.writes, isEmpty);
+      expect(markCopiedCalls('one'), 0);
+      expect(haptics.calls, 0);
+      expect(actions.isPending('one'), isFalse);
+
+      controller.endMaintenance();
+      expect(await actions.copyEntry(entry), MobileCopyOutcome.copied);
+      expect(clipboard.writes, ['exact body']);
+      expect(markCopiedCalls('one'), 1);
+    });
   });
 
   // === Observable state surfaces ===

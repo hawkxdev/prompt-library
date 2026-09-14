@@ -166,6 +166,10 @@ final class QuickPanelController {
     if (_disposed) {
       return;
     }
+    if (outcome == LibraryCopyOutcome.notAdmitted) {
+      _clearPendingCopy();
+      return;
+    }
     if (outcome == LibraryCopyOutcome.clipboardFailure) {
       _clearPendingCopy(copyFailed: true);
       return;
@@ -323,6 +327,11 @@ final class QuickPanelController {
   }
 
   void _applyQuickRequest(int generation) {
+    if (_library.state.isUnderMaintenance) {
+      _currentGeneration = generation;
+      unawaited(_rejectQuickRequest());
+      return;
+    }
     _currentGeneration = generation;
     _library.updateSearchQuery('');
     final entries = _library.state.visibleEntries;
@@ -332,6 +341,27 @@ final class QuickPanelController {
       copied: false,
       copyFailed: false,
       requestGeneration: generation,
+    );
+    _emit();
+  }
+
+  /// Returns the window to the full library when maintenance refuses the
+  /// quick transition.
+  Future<void> _rejectQuickRequest() async {
+    late final MacQuickPanelResult result;
+    try {
+      result = await _port.showFullLibrary();
+    } on Object {
+      return;
+    }
+    if (_disposed) {
+      return;
+    }
+    _state = _state.copyWith(
+      mode: QuickPanelMode.fullLibrary,
+      copied: false,
+      copyFailed: false,
+      latestNativeFailure: _failureFrom(result),
     );
     _emit();
   }
