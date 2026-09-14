@@ -7,6 +7,14 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompt_library/src/library/models/library_failure.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
+import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
+import 'package:prompt_library/src/library/presentation/library_haptics.dart';
+import 'package:prompt_library/src/library/presentation/library_share.dart';
+import 'package:prompt_library/src/library/presentation/mobile/mobile_library_actions.dart';
+import 'package:prompt_library/src/platform/macos/mac_quick_panel_port.dart';
+import 'package:prompt_library/src/platform/macos/quick_panel_controller.dart';
+import 'package:prompt_library/src/platform/macos/quick_panel_delay.dart';
+import 'package:prompt_library/src/platform/macos/quick_panel_state.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
 import 'package:prompt_library/src/library/presentation/library_document_files.dart';
 import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
@@ -21,11 +29,13 @@ void main() {
   late TestLibraryRepository repository;
   late LibraryController library;
   late TestDocumentFiles files;
+  late _GateClipboard clipboard;
   late LibraryTransferController controller;
 
   setUp(() {
     repository = TestLibraryRepository();
     library = LibraryController(repository: repository);
+    clipboard = _GateClipboard();
     files = TestDocumentFiles();
     controller = LibraryTransferController(
       repository: repository,
@@ -967,6 +977,324 @@ void main() {
       },
     );
   });
+
+  group('ordering with admitted copy cycles', () {
+    test(
+      'desktop cycle holds the barrier; the moved library goes stale',
+      () async {
+        final expected = await _startRestoreImport(
+          repository,
+          files,
+          controller,
+        );
+        await _verifyThroughBackup(files, controller, expected);
+
+        final gate = clipboard.block();
+        final copied = copyLibraryEntry(
+          entry: testEntry('kept-1'),
+          clipboard: clipboard,
+          controller: library,
+        );
+        await pumpEventQueue();
+        expect(clipboard.writes, isNotEmpty);
+
+        final applied = controller.apply();
+        await pumpEventQueue();
+        expect(library.state.isUnderMaintenance, isTrue);
+        expect(repository.calls, isNot(contains('restoreSnapshot')));
+
+        gate.complete();
+        expect(await copied, LibraryCopyOutcome.copied);
+        await applied;
+
+        expect(repository.calls, contains('markCopied:kept-1'));
+        expect(repository.calls, isNot(contains('restoreSnapshot')));
+        expect(repository.calls, ['markCopied:kept-1']);
+      },
+    );
+
+    test(
+      'quick panel cycle holds the barrier; the moved library goes stale',
+      () async {
+        final expected = await _startRestoreImport(
+          repository,
+          files,
+          controller,
+        );
+        await _verifyThroughBackup(files, controller, expected);
+        final panel = QuickPanelController(
+          libraryController: library,
+          clipboard: clipboard,
+          port: _StubQuickPanelPort(),
+          delay: _ImmediateDelay(),
+        );
+
+        final gate = clipboard.block();
+        final copied = panel.copySelected();
+        await pumpEventQueue();
+        expect(clipboard.writes, isNotEmpty);
+        expect(panel.state.pendingAction, QuickPanelPendingAction.copy);
+
+        final applied = controller.apply();
+        await pumpEventQueue();
+        expect(library.state.isUnderMaintenance, isTrue);
+        expect(repository.calls, isNot(contains('restoreSnapshot')));
+
+        gate.complete();
+        await copied;
+        await applied;
+
+        expect(controller.state, isA<LibraryTransferStale>());
+        expect(library.state.isUnderMaintenance, isFalse);
+        expect(repository.calls, contains('markCopied:kept-1'));
+        expect(repository.calls, isNot(contains('restoreSnapshot')));
+        expect(panel.state.pendingAction, isNull);
+        await panel.dispose();
+      },
+    );
+
+    test(
+      'mobile cycle holds the barrier; the moved library goes stale',
+      () async {
+        final expected = await _startRestoreImport(
+          repository,
+          files,
+          controller,
+        );
+        await _verifyThroughBackup(files, controller, expected);
+        final haptics = _SilentHaptics();
+        final actions = MobileLibraryActions(
+          controller: library,
+          clipboard: clipboard,
+          share: const UnavailableLibraryShare(),
+          haptics: haptics,
+        );
+
+        final gate = clipboard.block();
+        final copied = actions.copyEntry(testEntry('kept-1'));
+        await pumpEventQueue();
+        expect(clipboard.writes, isNotEmpty);
+
+        final applied = controller.apply();
+        await pumpEventQueue();
+        expect(library.state.isUnderMaintenance, isTrue);
+        expect(repository.calls, isNot(contains('restoreSnapshot')));
+
+        gate.complete();
+        expect(await copied, MobileCopyOutcome.copied);
+        await applied;
+
+        expect(controller.state, isA<LibraryTransferStale>());
+        expect(library.state.isUnderMaintenance, isFalse);
+        expect(repository.calls, contains('markCopied:kept-1'));
+        expect(repository.calls, isNot(contains('restoreSnapshot')));
+        expect(haptics.calls, 1);
+      },
+    );
+
+    test(
+      'a cycle started under maintenance is refused; the restore applies',
+      () async {
+        final expected = await _startRestoreImport(
+          repository,
+          files,
+          controller,
+        );
+        await _verifyThroughBackup(files, controller, expected);
+
+        Future<LibraryCopyOutcome>? refused;
+        repository.onNextRead = () {
+          refused = copyLibraryEntry(
+            entry: testEntry('kept-1'),
+            clipboard: clipboard,
+            controller: library,
+          );
+        };
+
+        await controller.apply();
+
+        expect(controller.state, isA<LibraryTransferRestoreDone>());
+        expect(await refused!, LibraryCopyOutcome.notAdmitted);
+        expect(clipboard.writes, isEmpty);
+        expect(repository.calls, isNot(contains('markCopied:kept-1')));
+        final restored = await repository.getSnapshot();
+        expect(
+          restored.entries
+              .singleWhere((entry) => entry.id == 'incoming-1')
+              .lastCopiedAt,
+          isNull,
+        );
+      },
+    );
+
+    test(
+      'a buffer failure during the barrier still applies the restore',
+      () async {
+        final expected = await _startRestoreImport(
+          repository,
+          files,
+          controller,
+        );
+        await _verifyThroughBackup(files, controller, expected);
+
+        final gate = clipboard.blockAfterWrite(const LibraryClipboardFailure());
+        final copied = copyLibraryEntry(
+          entry: testEntry('kept-1'),
+          clipboard: clipboard,
+          controller: library,
+        );
+        await pumpEventQueue();
+
+        final applied = controller.apply();
+        await pumpEventQueue();
+        expect(library.state.isUnderMaintenance, isTrue);
+
+        gate.complete();
+        expect(await copied, LibraryCopyOutcome.clipboardFailure);
+        await applied;
+
+        expect(controller.state, isA<LibraryTransferRestoreDone>());
+        expect(repository.calls, contains('restoreSnapshot'));
+        expect(repository.calls, isNot(contains('markCopied:kept-1')));
+        expect(library.state.isUnderMaintenance, isFalse);
+      },
+    );
+
+    test(
+      'teardown with a held buffer skips metadata and resolves the barrier',
+      () async {
+        final expected = await _startRestoreImport(
+          repository,
+          files,
+          controller,
+        );
+        await _verifyThroughBackup(files, controller, expected);
+        final panel = QuickPanelController(
+          libraryController: library,
+          clipboard: clipboard,
+          port: _StubQuickPanelPort(),
+          delay: _ImmediateDelay(),
+        );
+
+        final gate = clipboard.block();
+        final copied = panel.copySelected();
+        await pumpEventQueue();
+        expect(clipboard.writes, isNotEmpty);
+
+        final barrier = library.beginMaintenance();
+        var resolved = false;
+        unawaited(barrier.then((_) => resolved = true));
+
+        await panel.dispose();
+        await library.dispose();
+        await pumpEventQueue();
+        expect(resolved, isTrue, reason: 'dispose releases admitted cycles');
+
+        gate.complete();
+        await copied;
+        await pumpEventQueue();
+        expect(repository.calls, isNot(contains('markCopied:kept-1')));
+      },
+    );
+  });
+}
+
+/// Clipboard fake holding the write and raising a failure on release.
+final class _GateClipboard implements LibraryClipboard {
+  /// Recorded clipboard writes.
+  final List<String> writes = [];
+
+  Completer<void>? _gate;
+  Object? _errorOnRelease;
+
+  /// Holds the write until completed.
+  Completer<void> block() {
+    _gate = Completer<void>();
+    _errorOnRelease = null;
+    return _gate!;
+  }
+
+  /// Holds the write and raises [error] after the gate completes.
+  Completer<void> blockAfterWrite(Object error) {
+    _gate = Completer<void>();
+    _errorOnRelease = error;
+    return _gate!;
+  }
+
+  @override
+  Future<void> writeText(String text) async {
+    writes.add(text);
+    final gate = _gate;
+    final error = _errorOnRelease;
+    if (gate != null) {
+      _gate = null;
+      _errorOnRelease = null;
+      await gate.future;
+    }
+    if (error != null) {
+      throw error;
+    }
+  }
+}
+
+/// Port stub whose native operations always succeed.
+final class _StubQuickPanelPort implements MacQuickPanelPort {
+  final StreamController<int> _requests = StreamController<int>.broadcast();
+  final StreamController<int> _fullRequests = StreamController<int>.broadcast();
+
+  @override
+  Stream<int> get quickModeRequests => _requests.stream;
+
+  @override
+  Stream<int> get fullLibraryRequests => _fullRequests.stream;
+
+  @override
+  Future<MacQuickPanelResult> registerHotKey(HotKeySpec spec) async =>
+      const MacQuickPanelResult(MacQuickPanelResultKind.registered);
+
+  @override
+  Future<MacQuickPanelResult> registrationState() async =>
+      const MacQuickPanelResult(MacQuickPanelResultKind.registered);
+
+  @override
+  Future<MacQuickPanelResult> unregisterHotKey() async =>
+      const MacQuickPanelResult(MacQuickPanelResultKind.registered);
+
+  @override
+  Future<MacQuickPanelResult> hideQuickMode({
+    required bool restoreFocus,
+    required int generation,
+  }) async => const MacQuickPanelResult(MacQuickPanelResultKind.registered);
+
+  @override
+  Future<MacQuickPanelResult> showFullLibrary() async =>
+      const MacQuickPanelResult(MacQuickPanelResultKind.registered);
+
+  @override
+  Future<void> dispose() async {
+    await _requests.close();
+    await _fullRequests.close();
+  }
+}
+
+/// Delay fake that never holds the copy confirmation.
+final class _ImmediateDelay implements QuickPanelDelay {
+  @override
+  Future<void> wait() async {}
+
+  @override
+  void cancel() {}
+}
+
+/// Haptics fake recording feedback requests.
+final class _SilentHaptics implements LibraryHaptics {
+  /// Number of feedback requests.
+  int calls = 0;
+
+  @override
+  Future<void> selectionFeedback() async {
+    calls++;
+  }
 }
 
 /// Starts a restore review over a document adding one entry.

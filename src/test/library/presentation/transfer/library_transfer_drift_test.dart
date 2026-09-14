@@ -1,7 +1,10 @@
 /// Transfer controller tests over the real Drift repository.
 library;
 
+import 'dart:async';
 import 'dart:convert';
+
+import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -128,4 +131,90 @@ void main() {
       '  al  ',
     );
   });
+
+  test(
+    'a held copy cycle goes stale on Drift and applies after a new review',
+    () async {
+      final current = await repository.getSnapshot();
+      final incoming = LibrarySnapshot(
+        entries: [
+          ...current.entries,
+          testEntry('incoming-1', title: 'Incoming', body: 'Incoming body'),
+        ],
+      );
+      files.pickResult = DocumentPicked(
+        fileName: 'library.json',
+        bytes: LibraryJsonCodec().encode(
+          LibraryDocument(
+            snapshot: incoming,
+            exportedAt: DateTime.utc(2026, 9),
+          ),
+        ),
+      );
+      await transfer.startImport();
+      await transfer.settled;
+      expect(transfer.state, isA<LibraryTransferRestoreReview>());
+      await verifyBackup();
+
+      final gate = Completer<void>();
+      final cycleClipboard = _HoldClipboard(gate);
+      final entry = (await repository.getSnapshot()).entries.single;
+      final copied = copyLibraryEntry(
+        entry: entry,
+        clipboard: cycleClipboard,
+        controller: library,
+      );
+      await pumpEventQueue();
+      expect(cycleClipboard.writes, isNotEmpty);
+
+      final applied = transfer.apply();
+      await pumpEventQueue();
+      expect(library.state.isUnderMaintenance, isTrue);
+      expect(transfer.state, isA<LibraryTransferApplying>());
+
+      gate.complete();
+      expect(await copied, LibraryCopyOutcome.copied);
+      await applied;
+
+      expect(transfer.state, isA<LibraryTransferStale>());
+      expect(library.state.isUnderMaintenance, isFalse);
+      final after = await repository.getSnapshot();
+      expect(after.entries.single.id, entry.id);
+      expect(after.entries.single.lastCopiedAt, isNotNull);
+
+      transfer.cancel();
+      files.pickResult = DocumentPicked(
+        fileName: 'library.json',
+        bytes: LibraryJsonCodec().encode(
+          LibraryDocument(
+            snapshot: incoming,
+            exportedAt: DateTime.utc(2026, 9),
+          ),
+        ),
+      );
+      await transfer.startImport();
+      await transfer.settled;
+      expect(transfer.state, isA<LibraryTransferRestoreReview>());
+      await verifyBackup();
+      await transfer.apply();
+      expect(transfer.state, isA<LibraryTransferRestoreDone>());
+      expect(await repository.getSnapshot(), incoming);
+    },
+  );
+}
+
+/// Clipboard fake holding the cycle write until released.
+final class _HoldClipboard implements LibraryClipboard {
+  _HoldClipboard(this._gate);
+
+  final Completer<void> _gate;
+
+  /// Recorded clipboard writes.
+  final List<String> writes = [];
+
+  @override
+  Future<void> writeText(String text) async {
+    writes.add(text);
+    await _gate.future;
+  }
 }
