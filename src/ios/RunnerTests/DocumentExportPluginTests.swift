@@ -511,3 +511,138 @@ final class DocumentExportPluginTests: XCTestCase {
     secondMaker.pickers[0].fireCancelled()
   }
 }
+
+/// Receives no events; keeps the weak forwarder of a real picker alive.
+@MainActor
+private final class SilentPickerDelegate: NSObject, UIDocumentPickerDelegate {}
+
+/// Presentation of the real system picker from a scene-attached presenter.
+///
+/// The fakes above report presentation synchronously; UIKit presents the
+/// system picker asynchronously through a remote view controller, so these
+/// cases run the real controller inside the host application's scene.
+@MainActor
+final class SystemDocumentPickerPresentationTests: XCTestCase {
+  private var window: UIWindow!
+  private var presenter: UIViewController!
+  private var tempDirectory: URL!
+
+  override func setUpWithError() throws {
+    try super.setUpWithError()
+    let scene = try XCTUnwrap(
+      UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+    )
+    presenter = UIViewController()
+    window = UIWindow(windowScene: scene)
+    window.windowLevel = .alert
+    window.rootViewController = presenter
+    window.makeKeyAndVisible()
+    tempDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("system_picker_tests_\(UUID().uuidString)", isDirectory: true)
+  }
+
+  override func tearDown() {
+    presenter?.presentedViewController?.dismiss(animated: false)
+    window?.isHidden = true
+    window = nil
+    presenter = nil
+    try? FileManager.default.removeItem(at: tempDirectory)
+    super.tearDown()
+  }
+
+  /// Spins the main run loop until the condition holds or the timeout ends.
+  private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition() && Date() < deadline {
+      RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    }
+    return condition()
+  }
+
+  private func exportSources() -> [String] {
+    (FileManager.default.subpaths(atPath: tempDirectory.path) ?? [])
+      .filter { $0.hasSuffix("library.json") }
+  }
+
+  func testRealPickerKeepsExportPendingAndSourceWhilePresented() {
+    let plugin = DocumentExportPlugin(
+      channel: FakeChannel(),
+      writer: FoundationDocumentTempWriter(),
+      pickerMaker: SystemDocumentPickerMaker(),
+      presenterProvider: { [presenter] in presenter },
+      tempDirectory: tempDirectory
+    )
+    var replies: [Any?] = []
+    plugin.handle(
+      FlutterMethodCall(
+        methodName: "exportDocument",
+        arguments: [
+          "name": "library.json",
+          "kind": "json",
+          "bytes": FlutterStandardTypedData(bytes: Data("payload".utf8)),
+        ]
+      )
+    ) { replies.append($0) }
+
+    // A cold first presentation took about 4 s on the simulator.
+    let presented = waitUntil(timeout: 30) { self.presenter.presentedViewController != nil }
+
+    XCTAssertTrue(presented, "the system picker was not presented")
+    XCTAssertTrue(
+      replies.isEmpty,
+      "export replied before a picker outcome: \(replies); presented:"
+        + " \(String(describing: presenter.presentedViewController))"
+    )
+    XCTAssertEqual(exportSources().count, 1, "the source was removed while the picker is presented")
+
+    plugin.shutdown()
+    XCTAssertTrue(waitUntil { self.exportSources().isEmpty })
+  }
+
+  func testShutdownBeforePickerAppearsKeepsSourceUntilDismissal() {
+    let plugin = DocumentExportPlugin(
+      channel: FakeChannel(),
+      writer: FoundationDocumentTempWriter(),
+      pickerMaker: SystemDocumentPickerMaker(),
+      presenterProvider: { [presenter] in presenter },
+      tempDirectory: tempDirectory
+    )
+    plugin.handle(
+      FlutterMethodCall(
+        methodName: "exportDocument",
+        arguments: [
+          "name": "library.json",
+          "kind": "json",
+          "bytes": FlutterStandardTypedData(bytes: Data("payload".utf8)),
+        ]
+      )
+    ) { _ in }
+
+    plugin.shutdown()
+
+    XCTAssertEqual(
+      exportSources().count,
+      1,
+      "the source was removed before the system picker appeared"
+    )
+    XCTAssertTrue(
+      waitUntil(timeout: 30) {
+        self.exportSources().isEmpty && self.presenter.presentedViewController == nil
+      },
+      "the picker was not dismissed and cleaned up after it appeared"
+    )
+  }
+
+  func testRealPickerRefusedWhilePresenterShowsAnotherController() throws {
+    let blocker = UIViewController()
+    presenter.present(blocker, animated: false)
+    try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+    let source = tempDirectory.appendingPathComponent("refused.json")
+    try Data("payload".utf8).write(to: source)
+    let forwarder = SilentPickerDelegate()
+    let picker = SystemDocumentPicker(fileURL: source, presenter: presenter, forwarder: forwarder)
+
+    XCTAssertFalse(picker.present())
+    XCTAssertTrue(presenter.presentedViewController === blocker)
+  }
+}

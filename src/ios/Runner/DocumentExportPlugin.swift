@@ -90,6 +90,8 @@ final class SystemDocumentPicker: NSObject, UIDocumentPickerDelegate, DocumentPi
   private let controller: UIDocumentPickerViewController
   private let presenter: UIViewController
   private weak var forwarder: UIDocumentPickerDelegate?
+  private var presentationPending = false
+  private var pendingDismissal: (() -> Void)?
 
   init(fileURL: URL, presenter: UIViewController, forwarder: UIDocumentPickerDelegate) {
     self.presenter = presenter
@@ -110,14 +112,26 @@ final class SystemDocumentPicker: NSObject, UIDocumentPickerDelegate, DocumentPi
     else {
       return false
     }
-    presenter.present(controller, animated: true)
-    return presenter.presentedViewController === controller
+    // The system picker appears asynchronously through a remote view
+    // controller and reports nothing until its completion, so a ready
+    // presenter is the last observable refusal point.
+    presentationPending = true
+    presenter.present(controller, animated: true) { [weak self] in
+      self?.completePresentation()
+    }
+    return true
   }
 
   func dismiss(completion: @escaping () -> Void) {
     if controller.isBeingDismissed {
       guard let coordinator = controller.transitionCoordinator else { return }
       _ = coordinator.animate(alongsideTransition: nil) { _ in completion() }
+      return
+    }
+    // The system may still read the exported file until the presentation
+    // completes, so dismissal waits for that completion instead of a timeout.
+    if presentationPending {
+      pendingDismissal = completion
       return
     }
     guard
@@ -128,6 +142,14 @@ final class SystemDocumentPicker: NSObject, UIDocumentPickerDelegate, DocumentPi
       completion()
       return
     }
+    controller.dismiss(animated: false, completion: completion)
+  }
+
+  /// Marks the presentation finished and runs a dismissal requested before it.
+  private func completePresentation() {
+    presentationPending = false
+    guard let completion = pendingDismissal else { return }
+    pendingDismissal = nil
     controller.dismiss(animated: false, completion: completion)
   }
 
