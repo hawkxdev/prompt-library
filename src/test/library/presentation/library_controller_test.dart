@@ -462,15 +462,14 @@ void main() {
         final cycle = controller.admitCopyCycle('entry-1')!;
         final metadataGate = repository.block('markCopied:entry-1');
 
+        final barrier = controller.beginMaintenance();
+        var resolved = false;
+        unawaited(barrier.then((_) => resolved = true));
+
         final write = cycle.markCopied();
         cycle.release();
         await pumpEventQueue();
         expect(repository.calls, ['markCopied:entry-1']);
-
-        final barrier = controller.beginMaintenance();
-        var resolved = false;
-        unawaited(barrier.then((_) => resolved = true));
-        await pumpEventQueue();
         expect(resolved, isFalse, reason: 'the descriptor write is still held');
 
         metadataGate.complete();
