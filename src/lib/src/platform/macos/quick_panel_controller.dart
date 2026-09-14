@@ -347,14 +347,24 @@ final class QuickPanelController {
 
   /// Returns the window to the full library when maintenance refuses the
   /// quick transition.
+  ///
+  /// A port answer can outlive the refusal it belongs to; when a newer quick
+  /// or full request was accepted during the wait, the stale completion is a
+  /// no-op. Unexpected port errors do not disappear silently: after teardown
+  /// they are ignored, otherwise they are handed to the enclosing zone.
   Future<void> _rejectQuickRequest() async {
+    final generation = _currentGeneration;
     late final MacQuickPanelResult result;
     try {
       result = await _port.showFullLibrary();
-    } on Object {
+    } on Object catch (error, stackTrace) {
+      if (_disposed) {
+        return;
+      }
+      Zone.current.handleUncaughtError(error, stackTrace);
       return;
     }
-    if (_disposed) {
+    if (_disposed || generation != _currentGeneration) {
       return;
     }
     _state = _state.copyWith(

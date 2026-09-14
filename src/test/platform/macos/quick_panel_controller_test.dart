@@ -670,6 +670,67 @@ void main() {
       library.endMaintenance();
     },
   );
+
+  test(
+    'stale refusal completion cannot overwrite a newer presentation',
+    () async {
+      repository.emit(LibrarySnapshot(entries: [testEntry('entry-1')]));
+      await controller.initialize(defaultSpec);
+      port.showGate = Completer<void>();
+      port.showResult = const MacQuickPanelResult(
+        MacQuickPanelResultKind.nativeFailure,
+        diagnosticCode: -42,
+      );
+      await library.beginMaintenance();
+
+      port.emitQuickModeRequest(generation: 5);
+      await _flush();
+      expect(port.showCalls, 1);
+      expect(controller.state.mode, QuickPanelMode.fullLibrary);
+
+      library.endMaintenance();
+      port.emitQuickModeRequest(generation: 7);
+      await _flush();
+      expect(controller.state.mode, QuickPanelMode.quick);
+
+      port.showGate!.complete();
+      await _flush();
+
+      expect(controller.state.mode, QuickPanelMode.quick);
+      expect(controller.state.latestNativeFailure, isNull);
+    },
+  );
+
+  test(
+    'unexpected refusal error escapes to the zone without state change',
+    () async {
+      repository.emit(LibrarySnapshot(entries: [testEntry('entry-1')]));
+      final unexpectedErrors = <Object>[];
+      final unexpectedStacks = <StackTrace>[];
+      await runZonedGuarded(
+        () async {
+          await controller.initialize(defaultSpec);
+          await library.beginMaintenance();
+          port.nextShowError = const FormatException('show');
+          port.emitQuickModeRequest(generation: 5);
+          await _flush();
+        },
+        (error, stackTrace) {
+          unexpectedErrors.add(error);
+          unexpectedStacks.add(stackTrace);
+        },
+      );
+      await _flush();
+
+      expect(unexpectedErrors, hasLength(1));
+      expect(unexpectedErrors.single, isA<FormatException>());
+      expect((unexpectedErrors.single as FormatException).message, 'show');
+      expect(unexpectedStacks.single, isNotNull);
+      expect(controller.state.mode, QuickPanelMode.fullLibrary);
+      expect(controller.state.pendingAction, isNull);
+      expect(port.showCalls, 1);
+    },
+  );
 }
 
 /// Repository whose metadata write fails unexpectedly.
