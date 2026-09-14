@@ -32,6 +32,7 @@ final class LibraryController {
   final LibraryRepository _repository;
   final StreamController<LibraryState> _statesController;
   final Map<LibraryMutationKey, Future<void>> _inFlightMutations = {};
+  final Set<LibraryCopyCycle> _admittedCycles = {};
 
   StreamSubscription<LibrarySnapshot>? _snapshotSubscription;
   LibraryState _state;
@@ -138,6 +139,20 @@ final class LibraryController {
     );
   }
 
+  /// Admits one full copy cycle for the entry.
+  ///
+  /// Returns null when maintenance or teardown refuses the admission. The
+  /// admitted cycle owns the only permitted metadata write for its entry
+  /// and must be released whatever the cycle outcome is.
+  LibraryCopyCycle? admitCopyCycle(String entryId) {
+    if (_isDisposed || _state.isUnderMaintenance) {
+      return null;
+    }
+    final cycle = LibraryCopyCycle._(this, entryId);
+    _admittedCycles.add(cycle);
+    return cycle;
+  }
+
   /// Updates favorite state.
   Future<void> setFavorite(String id, {required bool isFavorite}) {
     return _runMutation(
@@ -220,23 +235,25 @@ final class LibraryController {
 
   /// Enters maintenance, rejecting new mutations until it ends.
   ///
-  /// The returned future resolves after every already-started mutation
-  /// settles; their outcomes are delivered to their own callers.
+  /// The returned future resolves after every already-started mutation and
+  /// every admitted copy cycle settles; their outcomes are delivered to
+  /// their own callers.
   Future<void> beginMaintenance() {
     _ensureActive();
     if (_state.isUnderMaintenance) {
       throw StateError('LibraryController is already under maintenance');
     }
     _emit(_state.copyWith(isUnderMaintenance: true));
-    final pending = _inFlightMutations.values.toList(growable: false);
+    final pending = [
+      for (final future in _inFlightMutations.values)
+        future.then<void>((_) {}, onError: (Object _) {}),
+      for (final cycle in _admittedCycles.toList(growable: false))
+        cycle._completion,
+    ];
     if (pending.isEmpty) {
       return Future<void>.value();
     }
-    return Future.wait(
-      pending.map(
-        (future) => future.then<void>((_) {}, onError: (Object _) {}),
-      ),
-    );
+    return Future.wait(pending);
   }
 
   /// Leaves maintenance and resumes mutation intake.
@@ -306,12 +323,16 @@ final class LibraryController {
   }
 
   /// Runs guarded mutation.
+  ///
+  /// An admitted copy cycle write bypasses the maintenance check: the cycle
+  /// registered before the barrier and keeps its metadata right beyond it.
   Future<void> _runMutation(
     LibraryMutationKey key,
-    Future<void> Function() operation,
-  ) {
+    Future<void> Function() operation, {
+    bool admitted = false,
+  }) {
     _ensureActive();
-    if (_state.isUnderMaintenance) {
+    if (_state.isUnderMaintenance && !admitted) {
       throw StateError('LibraryController is under maintenance');
     }
     final existing = _inFlightMutations[key];
@@ -363,12 +384,80 @@ final class LibraryController {
     }
   }
 
+  /// Records metadata for an admitted cycle beyond the maintenance check.
+  Future<void> _runAdmittedCopyWrite(String entryId) {
+    return _runMutation(
+      LibraryMutationKey(LibraryMutationKind.markCopied, entityId: entryId),
+      () => _repository.markCopied(entryId),
+      admitted: true,
+    );
+  }
+
+  /// Forgets the cycle once it is released and its write has settled.
+  void _forgetCycleWhenComplete(LibraryCopyCycle cycle) {
+    unawaited(cycle._completion.then((_) => _admittedCycles.remove(cycle)));
+  }
+
   /// Performs resource disposal.
   Future<void> _dispose() async {
     _isDisposed = true;
+    for (final cycle in _admittedCycles.toList(growable: false)) {
+      cycle.release();
+    }
     final subscription = _snapshotSubscription;
     _snapshotSubscription = null;
     await subscription?.cancel();
     await _statesController.close();
+  }
+}
+
+/// Admission ticket for one full copy cycle.
+///
+/// The controller hands a cycle out through [LibraryController.admitCopyCycle].
+/// The ticket carries the right to record metadata for its entry exactly once
+/// and must be released whatever the cycle outcome is; the maintenance
+/// barrier stays open until the ticket is released and its write settles.
+final class LibraryCopyCycle {
+  LibraryCopyCycle._(this._controller, this._entryId);
+
+  final LibraryController _controller;
+  final String _entryId;
+  final Completer<void> _released = Completer<void>();
+  Future<void>? _write;
+  bool _used = false;
+  bool _isReleased = false;
+  late final Future<void> _completion = _awaitCompletion();
+
+  /// Records copied metadata for the admitted entry.
+  ///
+  /// The write is permitted while the maintenance barrier waits and throws
+  /// [StateError] after release or a second use.
+  Future<void> markCopied() {
+    if (_isReleased) {
+      throw StateError('LibraryCopyCycle is already released');
+    }
+    if (_used) {
+      throw StateError('LibraryCopyCycle already recorded metadata');
+    }
+    _used = true;
+    final write = _controller._runAdmittedCopyWrite(_entryId);
+    _write = write;
+    return write;
+  }
+
+  /// Releases the cycle idempotently.
+  void release() {
+    if (_isReleased) {
+      return;
+    }
+    _isReleased = true;
+    _released.complete();
+    _controller._forgetCycleWhenComplete(this);
+  }
+
+  /// Resolves when the cycle is released and its write has settled.
+  Future<void> _awaitCompletion() async {
+    await _released.future;
+    await _write?.catchError((Object _) {});
   }
 }

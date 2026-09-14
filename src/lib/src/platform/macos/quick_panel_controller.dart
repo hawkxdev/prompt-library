@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import '../../library/models/entry.dart';
-import '../../library/models/library_failure.dart';
 import '../../library/presentation/library_clipboard.dart';
 import '../../library/presentation/library_controller.dart';
 import 'mac_quick_panel_port.dart';
@@ -153,24 +152,25 @@ final class QuickPanelController {
       copyFailed: false,
     );
     _emit();
+    LibraryCopyOutcome outcome;
     try {
-      await _clipboard.writeText(entry.body);
-    } on LibraryClipboardFailure {
-      _clearPendingCopy(copyFailed: true);
-      return;
+      outcome = await copyLibraryEntry(
+        entry: entry,
+        clipboard: _clipboard,
+        controller: _library,
+      );
     } catch (_) {
       _clearPendingCopy();
       rethrow;
     }
-    if (_disposed || _state.pendingAction != QuickPanelPendingAction.copy) {
+    if (_disposed) {
       return;
     }
-    try {
-      await _library.markCopied(entry.id);
-    } on LibraryFailure {
-      // Clipboard success remains authoritative when metadata persistence fails.
+    if (outcome == LibraryCopyOutcome.clipboardFailure) {
+      _clearPendingCopy(copyFailed: true);
+      return;
     }
-    if (_disposed || _state.pendingAction != QuickPanelPendingAction.copy) {
+    if (_state.pendingAction != QuickPanelPendingAction.copy) {
       return;
     }
     _state = _state.copyWith(copied: true);

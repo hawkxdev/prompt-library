@@ -92,13 +92,12 @@ final class _LibraryScreenState extends State<LibraryScreen> {
   Future<void> _copySelected() async {
     final entry = _selectedEntry;
     if (entry == null) return;
-    try {
-      await copyLibraryEntry(
-        entry: entry,
-        clipboard: widget.clipboard,
-        controller: widget.controller,
-      );
-    } on LibraryClipboardFailure {
+    final outcome = await copyLibraryEntry(
+      entry: entry,
+      clipboard: widget.clipboard,
+      controller: widget.controller,
+    );
+    if (outcome == LibraryCopyOutcome.clipboardFailure) {
       if (mounted) _showMessage('The prompt could not be copied.');
       return;
     }

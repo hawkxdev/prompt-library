@@ -13,18 +13,20 @@ import 'package:prompt_library/src/library/models/library_failure.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/models/tag.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
+import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_filter.dart';
 import 'package:prompt_library/src/library/presentation/library_state.dart';
 
 void main() {
   late _FakeLibraryRepository repository;
+  late _FakeClipboard clipboard;
   late LibraryController controller;
 
   setUp(() {
     repository = _FakeLibraryRepository();
     controller = LibraryController(repository: repository);
+    clipboard = _FakeClipboard();
   });
-
   tearDown(() async {
     await controller.dispose();
     await repository.close();
@@ -380,6 +382,190 @@ void main() {
     });
   });
 
+  // === Copy cycle admission tests ===
+  group('LibraryController copy cycles', () {
+    test(
+      'barrier waits for an admitted cycle through buffer and metadata',
+      () async {
+        final entry = _entry('entry-1');
+        repository.emit(LibrarySnapshot(entries: [entry]));
+        await pumpEventQueue();
+        final writeGate = clipboard.block();
+        final metadataGate = repository.block('markCopied:entry-1');
+
+        final copied = copyLibraryEntry(
+          entry: entry,
+          clipboard: clipboard,
+          controller: controller,
+        );
+        await pumpEventQueue();
+        expect(clipboard.writes, ['Body entry-1']);
+
+        final barrier = controller.beginMaintenance();
+        var resolved = false;
+        unawaited(barrier.then((_) => resolved = true));
+        await pumpEventQueue();
+        expect(
+          resolved,
+          isFalse,
+          reason: 'the admitted cycle still writes the buffer',
+        );
+
+        writeGate.complete();
+        await pumpEventQueue();
+        expect(repository.calls, ['markCopied:entry-1']);
+        expect(
+          resolved,
+          isFalse,
+          reason: 'the admitted cycle still records metadata',
+        );
+
+        metadataGate.complete();
+        expect(await copied, LibraryCopyOutcome.copied);
+        await barrier;
+        expect(resolved, isTrue);
+        controller.endMaintenance();
+      },
+    );
+
+    test(
+      'admitted cycle records metadata under the barrier without error',
+      () async {
+        final entry = _entry('entry-1');
+        repository.emit(LibrarySnapshot(entries: [entry]));
+        await pumpEventQueue();
+        final writeGate = clipboard.block();
+
+        final copied = copyLibraryEntry(
+          entry: entry,
+          clipboard: clipboard,
+          controller: controller,
+        );
+        await pumpEventQueue();
+        final barrier = controller.beginMaintenance();
+
+        writeGate.complete();
+        expect(await copied, LibraryCopyOutcome.copied);
+        await barrier;
+        expect(repository.calls, ['markCopied:entry-1']);
+
+        expect(() => controller.markCopied('entry-1'), throwsStateError);
+        controller.endMaintenance();
+      },
+    );
+
+    test(
+      'barrier outlives a descriptor released before its write completes',
+      () async {
+        repository.emit(LibrarySnapshot(entries: [_entry('entry-1')]));
+        await pumpEventQueue();
+        final cycle = controller.admitCopyCycle('entry-1')!;
+        final metadataGate = repository.block('markCopied:entry-1');
+
+        final write = cycle.markCopied();
+        cycle.release();
+        await pumpEventQueue();
+        expect(repository.calls, ['markCopied:entry-1']);
+
+        final barrier = controller.beginMaintenance();
+        var resolved = false;
+        unawaited(barrier.then((_) => resolved = true));
+        await pumpEventQueue();
+        expect(resolved, isFalse, reason: 'the descriptor write is still held');
+
+        metadataGate.complete();
+        await write;
+        await barrier;
+        expect(resolved, isTrue);
+        controller.endMaintenance();
+      },
+    );
+
+    test('refuses admission under maintenance and after teardown', () async {
+      repository.emit(LibrarySnapshot(entries: [_entry('entry-1')]));
+      await pumpEventQueue();
+
+      await controller.beginMaintenance();
+      expect(controller.admitCopyCycle('entry-1'), isNull);
+
+      controller.endMaintenance();
+      final cycle = controller.admitCopyCycle('entry-1');
+      expect(cycle, isNotNull);
+      cycle!.release();
+
+      await controller.dispose();
+      expect(controller.admitCopyCycle('entry-1'), isNull);
+    });
+
+    test(
+      'dispose releases an admitted cycle and resolves the barrier',
+      () async {
+        final entry = _entry('entry-1');
+        repository.emit(LibrarySnapshot(entries: [entry]));
+        await pumpEventQueue();
+        final writeGate = clipboard.block();
+
+        final copied = copyLibraryEntry(
+          entry: entry,
+          clipboard: clipboard,
+          controller: controller,
+        );
+        await pumpEventQueue();
+        final barrier = controller.beginMaintenance();
+        var resolved = false;
+        unawaited(barrier.then((_) => resolved = true));
+
+        await controller.dispose();
+        await pumpEventQueue();
+        expect(resolved, isTrue, reason: 'dispose releases admitted cycles');
+
+        writeGate.complete();
+        expect(await copied, LibraryCopyOutcome.copied);
+        await pumpEventQueue();
+        expect(repository.calls, isEmpty);
+      },
+    );
+
+    test(
+      'descriptor refuses writes after release and releases idempotently',
+      () async {
+        repository.emit(LibrarySnapshot(entries: [_entry('entry-1')]));
+        await pumpEventQueue();
+        final cycle = controller.admitCopyCycle('entry-1')!;
+
+        cycle.release();
+        expect(() => cycle.markCopied(), throwsStateError);
+        cycle.release();
+
+        await controller.beginMaintenance();
+        controller.endMaintenance();
+      },
+    );
+
+    test('releases the admission when metadata fails unexpectedly', () async {
+      final entry = _entry('entry-1');
+      repository.emit(LibrarySnapshot(entries: [entry]));
+      await pumpEventQueue();
+      final error = StateError('metadata adapter failed');
+      repository.failNext('markCopied:entry-1', error);
+
+      final copied = copyLibraryEntry(
+        entry: entry,
+        clipboard: clipboard,
+        controller: controller,
+      );
+      final errorExpectation = expectLater(copied, throwsA(same(error)));
+      final barrier = controller.beginMaintenance();
+      var resolved = false;
+      unawaited(barrier.then((_) => resolved = true));
+      await pumpEventQueue();
+
+      await errorExpectation;
+      await barrier;
+      expect(resolved, isTrue);
+    });
+  });
+
   // === Disposal tests ===
   group('LibraryController disposal', () {
     test('disposes idempotently and rejects later commands', () async {
@@ -402,6 +588,29 @@ void main() {
       await subscription.cancel();
     });
   });
+}
+
+/// Fake clipboard with a hold gate for the write.
+final class _FakeClipboard implements LibraryClipboard {
+  /// Recorded clipboard writes.
+  final List<String> writes = [];
+
+  Completer<void>? _gate;
+
+  /// Holds the next write until completed.
+  Completer<void> block() {
+    _gate = Completer<void>();
+    return _gate!;
+  }
+
+  @override
+  Future<void> writeText(String text) async {
+    writes.add(text);
+    final gate = _gate;
+    if (gate != null) {
+      await gate.future;
+    }
+  }
 }
 
 /// Fake repository implementation.

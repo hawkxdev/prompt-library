@@ -19,18 +19,47 @@ final class LibraryClipboardFailure implements Exception {
   const LibraryClipboardFailure();
 }
 
-/// Copies one entry and records metadata while the controller is active.
-Future<void> copyLibraryEntry({
+/// Outcomes of one full copy cycle.
+enum LibraryCopyOutcome {
+  /// The buffer and metadata were written.
+  copied,
+
+  /// The buffer refused the write.
+  clipboardFailure,
+
+  /// The controller refused the admission before any write.
+  notAdmitted,
+}
+
+/// Copies one entry through one admitted cycle and records metadata while
+/// the controller is active.
+///
+/// The admission is released whatever the outcome is; an unexpected buffer
+/// or metadata error reaches the caller unchanged.
+Future<LibraryCopyOutcome> copyLibraryEntry({
   required Entry entry,
   required LibraryClipboard clipboard,
   required LibraryController controller,
 }) async {
-  await clipboard.writeText(entry.body);
-  if (controller.isDisposed) return;
+  final cycle = controller.admitCopyCycle(entry.id);
+  if (cycle == null) {
+    return LibraryCopyOutcome.notAdmitted;
+  }
   try {
-    await controller.markCopied(entry.id);
-  } on LibraryFailure {
-    // Clipboard success remains authoritative when metadata persistence fails.
+    try {
+      await clipboard.writeText(entry.body);
+    } on LibraryClipboardFailure {
+      return LibraryCopyOutcome.clipboardFailure;
+    }
+    if (controller.isDisposed) return LibraryCopyOutcome.copied;
+    try {
+      await cycle.markCopied();
+    } on LibraryFailure {
+      // Clipboard success remains authoritative when metadata persistence fails.
+    }
+    return LibraryCopyOutcome.copied;
+  } finally {
+    cycle.release();
   }
 }
 

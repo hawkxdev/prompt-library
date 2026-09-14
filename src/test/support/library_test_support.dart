@@ -37,6 +37,9 @@ final class TestLibraryRepository implements LibraryRepository {
   /// Blocks the next repository mutation until completed.
   Completer<void>? nextMutationGate;
 
+  /// Blocks the next repository markCopied until completed.
+  Completer<void>? nextMarkCopiedGate;
+
   /// Runs once after the next snapshot read has captured its result and
   /// before the reader resumes, modelling a publication in that window.
   void Function()? onNextRead;
@@ -233,6 +236,9 @@ final class TestLibraryRepository implements LibraryRepository {
   @override
   Future<void> markCopied(String id) async {
     calls.add('markCopied:$id');
+    final gate = nextMarkCopiedGate;
+    nextMarkCopiedGate = null;
+    await gate?.future;
     await _failIfNeeded();
     _publish(
       entries: _snapshot.entries.map(

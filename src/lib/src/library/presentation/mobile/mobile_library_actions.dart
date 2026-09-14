@@ -89,13 +89,12 @@ final class MobileLibraryActions {
   /// Executes one guarded copy cycle.
   Future<MobileCopyOutcome> _runCycle(Entry entry) async {
     try {
-      try {
-        await copyLibraryEntry(
-          entry: entry,
-          clipboard: clipboard,
-          controller: controller,
-        );
-      } on LibraryClipboardFailure {
+      final outcome = await copyLibraryEntry(
+        entry: entry,
+        clipboard: clipboard,
+        controller: controller,
+      );
+      if (outcome == LibraryCopyOutcome.clipboardFailure) {
         return MobileCopyOutcome.clipboardFailure;
       }
       await _requestHapticFeedback();
