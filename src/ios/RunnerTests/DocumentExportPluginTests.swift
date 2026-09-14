@@ -629,7 +629,7 @@ final class SystemDocumentPickerPresentationTests: XCTestCase {
       waitUntil(timeout: 30) {
         self.exportSources().isEmpty && self.presenter.presentedViewController == nil
       },
-      "the picker was not dismissed and cleaned up after it appeared"
+      "the picker was not dismissed and cleaned up after the presentation settled"
     )
   }
 
