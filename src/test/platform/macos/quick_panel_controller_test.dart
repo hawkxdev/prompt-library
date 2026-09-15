@@ -775,12 +775,14 @@ void main() {
     'native show before the newer hotkey keeps dart and native consistent',
     () async {
       final native = _NativeServiceFakePort();
+      addTearDown(native.close);
       final nativeController = QuickPanelController(
         libraryController: library,
         clipboard: clipboard,
         port: native,
         delay: delay,
       );
+      addTearDown(nativeController.dispose);
       repository.emit(LibrarySnapshot(entries: [testEntry('entry-1')]));
       await nativeController.initialize(defaultSpec);
       await library.beginMaintenance();
@@ -808,21 +810,20 @@ void main() {
         nativeController.state.requestGeneration,
         native.presentationGeneration,
       );
-
-      await nativeController.dispose();
-      await native.close();
     },
   );
 
   test('hotkey handled by native before the refusal show leaves dart in quick '
       'over the full-library window', () async {
     final native = _NativeServiceFakePort();
+    addTearDown(native.close);
     final nativeController = QuickPanelController(
       libraryController: library,
       clipboard: clipboard,
       port: native,
       delay: delay,
     );
+    addTearDown(nativeController.dispose);
     repository.emit(LibrarySnapshot(entries: [testEntry('entry-1')]));
     await nativeController.initialize(defaultSpec);
     await library.beginMaintenance();
@@ -842,16 +843,14 @@ void main() {
     native.runPendingShow();
     await _flush();
 
-    // Accepted boundary (owner decision 15.09.2026): merged platform and
-    // UI threads on macOS deliver the hotkey event to Dart before the
-    // already-queued refusal show runs natively, so native restores the
-    // full-library window while Dart keeps quick mode until the next
-    // quick-panel event. The divergence is pinned deliberately.
+    // Accepted boundary (owner decision 15.09.2026): native handled the newer
+    // hotkey before running the refusal show it had already been asked for,
+    // so the show restores the full-library window while the stale refusal
+    // answer stays a no-op and Dart keeps quick mode until the next
+    // quick-panel event. The order does not depend on merged platform and UI
+    // threads. The divergence is pinned deliberately.
     expect(nativeController.state.mode, QuickPanelMode.quick);
     expect(native.isQuickMode, isFalse);
-
-    await nativeController.dispose();
-    await native.close();
   });
 
   test(
@@ -1164,9 +1163,9 @@ final class _FakePort implements MacQuickPanelPort {
   }
 }
 
-/// Port fake mirroring the native service presentation state: a hotkey press,
-/// the refusal show, and hide mutate `isQuickMode` and
-/// `presentationGeneration` the way `MacQuickPanelService` does, so a test
+/// Port fake mirroring the native service presentation state: a hotkey press
+/// and the refusal show mutate `isQuickMode` and `presentationGeneration` the
+/// way `MacQuickPanelService` does, and hide leaves both unchanged, so a test
 /// pins the native execution order explicitly.
 final class _NativeServiceFakePort implements MacQuickPanelPort {
   final StreamController<int> _requests = StreamController<int>.broadcast(
@@ -1181,8 +1180,6 @@ final class _NativeServiceFakePort implements MacQuickPanelPort {
 
   /// Mirrors the native presentation generation.
   int presentationGeneration = 0;
-  final List<bool> hideCalls = [];
-  int hideGenerationMismatches = 0;
   int showCalls = 0;
 
   /// Holds the native show body until the test runs it.
@@ -1237,12 +1234,7 @@ final class _NativeServiceFakePort implements MacQuickPanelPort {
     required bool restoreFocus,
     required int generation,
   }) async {
-    // Native returns success when the generation or quick mode no longer
-    // matches; the mismatch stays observable for a future test.
-    hideCalls.add(restoreFocus);
-    if (generation != presentationGeneration || !isQuickMode) {
-      hideGenerationMismatches++;
-    }
+    // Native hide changes neither the quick-mode flag nor the generation.
     return const MacQuickPanelResult(MacQuickPanelResultKind.registered);
   }
 
