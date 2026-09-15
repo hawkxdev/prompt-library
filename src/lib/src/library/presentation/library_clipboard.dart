@@ -21,7 +21,8 @@ final class LibraryClipboardFailure implements Exception {
 
 /// Outcomes of one full copy cycle.
 enum LibraryCopyOutcome {
-  /// The buffer and metadata were written.
+  /// The buffer was written; metadata was written too unless the controller
+  /// was already disposed or the typed metadata write failed.
   copied,
 
   /// The buffer refused the write.

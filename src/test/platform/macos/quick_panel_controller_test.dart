@@ -485,6 +485,35 @@ void main() {
     },
   );
 
+  test(
+    'full-library request during the clipboard write still records metadata',
+    () async {
+      repository.emit(LibrarySnapshot(entries: [testEntry('entry-1')]));
+      await controller.initialize(defaultSpec);
+      port.emitQuickModeRequest();
+      clipboard.gate = Completer<void>();
+
+      final copy = controller.copySelected();
+      await _flush();
+      expect(clipboard.values, ['Prompt body']);
+
+      port.emitFullLibraryRequest(generation: 7);
+      await _flush();
+      expect(controller.state.mode, QuickPanelMode.fullLibrary);
+      expect(controller.state.pendingAction, isNull);
+      expect(port.hideCalls, isEmpty);
+
+      clipboard.gate!.complete();
+      await copy;
+
+      expect(repository.calls, ['markCopied:entry-1']);
+      expect(controller.state.mode, QuickPanelMode.fullLibrary);
+      expect(controller.state.pendingAction, isNull);
+      expect(controller.state.copied, isFalse);
+      expect(port.hideCalls, isEmpty);
+    },
+  );
+
   test('dispose cancels pending delay and all later work', () async {
     repository.emit(LibrarySnapshot(entries: [testEntry('entry-1')]));
     await controller.initialize(defaultSpec);
@@ -643,6 +672,49 @@ void main() {
   });
 
   test(
+    'refusal keeps the request generation so an older hotkey is cut off',
+    () async {
+      repository.emit(LibrarySnapshot(entries: [testEntry('entry-1')]));
+      await controller.initialize(defaultSpec);
+      await library.beginMaintenance();
+
+      port.emitQuickModeRequest(generation: 5);
+      await _flush();
+      expect(controller.state.mode, QuickPanelMode.fullLibrary);
+      expect(port.showCalls, 1);
+
+      library.endMaintenance();
+      port.emitQuickModeRequest(generation: 4);
+      await _flush();
+
+      expect(controller.state.mode, QuickPanelMode.fullLibrary);
+      expect(port.showCalls, 1);
+    },
+  );
+
+  test('refusal completion publishes the native failure', () async {
+    repository.emit(LibrarySnapshot(entries: [testEntry('entry-1')]));
+    await controller.initialize(defaultSpec);
+    port.showResult = const MacQuickPanelResult(
+      MacQuickPanelResultKind.nativeFailure,
+      diagnosticCode: -50,
+    );
+    await library.beginMaintenance();
+
+    port.emitQuickModeRequest(generation: 5);
+    await _flush();
+
+    expect(controller.state.mode, QuickPanelMode.fullLibrary);
+    expect(
+      controller.state.latestNativeFailure,
+      const MacQuickPanelResult(
+        MacQuickPanelResultKind.nativeFailure,
+        diagnosticCode: -50,
+      ),
+    );
+  });
+
+  test(
     'queued quick request is refused when maintenance is still active',
     () async {
       repository.emit(
@@ -671,35 +743,116 @@ void main() {
     },
   );
 
-  test(
-    'stale refusal completion cannot overwrite a newer presentation',
-    () async {
-      repository.emit(LibrarySnapshot(entries: [testEntry('entry-1')]));
-      await controller.initialize(defaultSpec);
-      port.showGate = Completer<void>();
-      port.showResult = const MacQuickPanelResult(
-        MacQuickPanelResultKind.nativeFailure,
-        diagnosticCode: -42,
-      );
-      await library.beginMaintenance();
+  test('refusal completion from a native show preceding the newer hotkey is a '
+      'no-op', () async {
+    repository.emit(LibrarySnapshot(entries: [testEntry('entry-1')]));
+    await controller.initialize(defaultSpec);
+    port.showGate = Completer<void>();
+    port.showResult = const MacQuickPanelResult(
+      MacQuickPanelResultKind.nativeFailure,
+      diagnosticCode: -42,
+    );
+    await library.beginMaintenance();
 
-      port.emitQuickModeRequest(generation: 5);
+    port.emitQuickModeRequest(generation: 5);
+    await _flush();
+    expect(port.showCalls, 1);
+    expect(controller.state.mode, QuickPanelMode.fullLibrary);
+
+    library.endMaintenance();
+    port.emitQuickModeRequest(generation: 7);
+    await _flush();
+    expect(controller.state.mode, QuickPanelMode.quick);
+
+    port.showGate!.complete();
+    await _flush();
+
+    expect(controller.state.mode, QuickPanelMode.quick);
+    expect(controller.state.latestNativeFailure, isNull);
+  });
+
+  test(
+    'native show before the newer hotkey keeps dart and native consistent',
+    () async {
+      final native = _NativeServiceFakePort();
+      final nativeController = QuickPanelController(
+        libraryController: library,
+        clipboard: clipboard,
+        port: native,
+        delay: delay,
+      );
+      repository.emit(LibrarySnapshot(entries: [testEntry('entry-1')]));
+      await nativeController.initialize(defaultSpec);
+      await library.beginMaintenance();
+      native.showAnswerGate = Completer<void>();
+
+      native.pressHotKey();
       await _flush();
-      expect(port.showCalls, 1);
-      expect(controller.state.mode, QuickPanelMode.fullLibrary);
+      expect(native.isQuickMode, isFalse);
+      expect(native.presentationGeneration, 2);
+      expect(nativeController.state.mode, QuickPanelMode.fullLibrary);
 
       library.endMaintenance();
-      port.emitQuickModeRequest(generation: 7);
+      native.pressHotKey();
       await _flush();
-      expect(controller.state.mode, QuickPanelMode.quick);
+      expect(nativeController.state.mode, QuickPanelMode.quick);
 
-      port.showGate!.complete();
+      native.releaseShowAnswer();
       await _flush();
 
-      expect(controller.state.mode, QuickPanelMode.quick);
-      expect(controller.state.latestNativeFailure, isNull);
+      // The native show ran before the newer hotkey press, so the stale
+      // refusal answer must not overwrite it: both sides agree on quick mode.
+      expect(nativeController.state.mode, QuickPanelMode.quick);
+      expect(native.isQuickMode, isTrue);
+      expect(
+        nativeController.state.requestGeneration,
+        native.presentationGeneration,
+      );
+
+      await nativeController.dispose();
+      await native.close();
     },
   );
+
+  test('hotkey handled by native before the refusal show leaves dart in quick '
+      'over the full-library window', () async {
+    final native = _NativeServiceFakePort();
+    final nativeController = QuickPanelController(
+      libraryController: library,
+      clipboard: clipboard,
+      port: native,
+      delay: delay,
+    );
+    repository.emit(LibrarySnapshot(entries: [testEntry('entry-1')]));
+    await nativeController.initialize(defaultSpec);
+    await library.beginMaintenance();
+    native.showExecutionGate = Completer<void>();
+    native.pressHotKey();
+    await _flush();
+    expect(native.isQuickMode, isTrue);
+    expect(native.presentationGeneration, 1);
+    expect(nativeController.state.mode, QuickPanelMode.fullLibrary);
+
+    library.endMaintenance();
+    native.pressHotKey();
+    await _flush();
+    expect(nativeController.state.mode, QuickPanelMode.quick);
+    expect(native.presentationGeneration, 2);
+
+    native.runPendingShow();
+    await _flush();
+
+    // Accepted boundary (owner decision 15.09.2026): merged platform and
+    // UI threads on macOS deliver the hotkey event to Dart before the
+    // already-queued refusal show runs natively, so native restores the
+    // full-library window while Dart keeps quick mode until the next
+    // quick-panel event. The divergence is pinned deliberately.
+    expect(nativeController.state.mode, QuickPanelMode.quick);
+    expect(native.isQuickMode, isFalse);
+
+    await nativeController.dispose();
+    await native.close();
+  });
 
   test(
     'unexpected refusal error escapes to the zone without state change',
@@ -731,6 +884,32 @@ void main() {
       expect(port.showCalls, 1);
     },
   );
+
+  test('refusal error after teardown stays silent', () async {
+    repository.emit(LibrarySnapshot(entries: [testEntry('entry-1')]));
+    final unexpectedErrors = <Object>[];
+    await runZonedGuarded(
+      () async {
+        await controller.initialize(defaultSpec);
+        await library.beginMaintenance();
+        port.showGate = Completer<void>();
+        port.nextShowError = const FormatException('show');
+        port.emitQuickModeRequest(generation: 5);
+        await _flush();
+      },
+      (error, stackTrace) {
+        unexpectedErrors.add(error);
+      },
+    );
+
+    expect(port.showCalls, 1);
+    await controller.dispose();
+    port.showGate!.complete();
+    await _flush();
+
+    expect(unexpectedErrors, isEmpty);
+    expect(controller.isDisposed, isTrue);
+  });
 }
 
 /// Repository whose metadata write fails unexpectedly.
@@ -978,6 +1157,107 @@ final class _FakePort implements MacQuickPanelPort {
       _fullRequests.add(generation ?? _nextGeneration++);
     }
   }
+
+  Future<void> close() async {
+    await _requests.close();
+    await _fullRequests.close();
+  }
+}
+
+/// Port fake mirroring the native service presentation state: a hotkey press,
+/// the refusal show, and hide mutate `isQuickMode` and
+/// `presentationGeneration` the way `MacQuickPanelService` does, so a test
+/// pins the native execution order explicitly.
+final class _NativeServiceFakePort implements MacQuickPanelPort {
+  final StreamController<int> _requests = StreamController<int>.broadcast(
+    sync: true,
+  );
+  final StreamController<int> _fullRequests = StreamController<int>.broadcast(
+    sync: true,
+  );
+
+  /// Mirrors the native quick-mode flag.
+  bool isQuickMode = false;
+
+  /// Mirrors the native presentation generation.
+  int presentationGeneration = 0;
+  final List<bool> hideCalls = [];
+  int hideGenerationMismatches = 0;
+  int showCalls = 0;
+
+  /// Holds the native show body until the test runs it.
+  Completer<void>? showExecutionGate;
+
+  /// Holds the show answer to Dart after the native body ran.
+  Completer<void>? showAnswerGate;
+
+  /// Applies the native hotkey press: generation bump, quick mode on, and a
+  /// request carrying the new generation.
+  void pressHotKey() {
+    presentationGeneration += 1;
+    isQuickMode = true;
+    if (!_requests.isClosed) {
+      _requests.add(presentationGeneration);
+    }
+  }
+
+  /// Runs the deferred native show body.
+  void runPendingShow() {
+    showExecutionGate?.complete();
+  }
+
+  /// Delivers the held show answer to Dart.
+  void releaseShowAnswer() {
+    showAnswerGate?.complete();
+  }
+
+  @override
+  Stream<int> get quickModeRequests => _requests.stream;
+
+  @override
+  Stream<int> get fullLibraryRequests => _fullRequests.stream;
+
+  @override
+  Future<MacQuickPanelResult> registerHotKey(HotKeySpec spec) async {
+    return const MacQuickPanelResult(MacQuickPanelResultKind.registered);
+  }
+
+  @override
+  Future<MacQuickPanelResult> registrationState() async {
+    return const MacQuickPanelResult(MacQuickPanelResultKind.registered);
+  }
+
+  @override
+  Future<MacQuickPanelResult> unregisterHotKey() async {
+    return const MacQuickPanelResult(MacQuickPanelResultKind.registered);
+  }
+
+  @override
+  Future<MacQuickPanelResult> hideQuickMode({
+    required bool restoreFocus,
+    required int generation,
+  }) async {
+    // Native returns success when the generation or quick mode no longer
+    // matches; the mismatch stays observable for a future test.
+    hideCalls.add(restoreFocus);
+    if (generation != presentationGeneration || !isQuickMode) {
+      hideGenerationMismatches++;
+    }
+    return const MacQuickPanelResult(MacQuickPanelResultKind.registered);
+  }
+
+  @override
+  Future<MacQuickPanelResult> showFullLibrary() async {
+    showCalls++;
+    await showExecutionGate?.future;
+    presentationGeneration += 1;
+    isQuickMode = false;
+    await showAnswerGate?.future;
+    return const MacQuickPanelResult(MacQuickPanelResultKind.registered);
+  }
+
+  @override
+  Future<void> dispose() async {}
 
   Future<void> close() async {
     await _requests.close();
