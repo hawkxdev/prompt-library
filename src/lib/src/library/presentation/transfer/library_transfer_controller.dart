@@ -553,7 +553,7 @@ final class LibraryTransferController {
   }
 
   Future<void> _runOperation(Future<void> Function() operation) async {
-    _ensureActive();
+    _ensureOperational();
     if (_busy || _state is LibraryTransferApplying) return;
     _busy = true;
     final done = Completer<void>();
@@ -593,12 +593,21 @@ final class LibraryTransferController {
   }
 
   void _ensureActive() {
+    if (_isDisposed) {
+      throw StateError('LibraryTransferController is disposed');
+    }
+  }
+
+  /// Rejects operation-opening paths while shutdown has begun.
+  ///
+  /// Only operations that open work through [_runOperation] are banned by a
+  /// begun shutdown; pure surface actions such as [cancel], [resumeReview],
+  /// and an early-returning [updateSelection] stay available until the real
+  /// disposal closes the controller.
+  void _ensureOperational() {
+    _ensureActive();
     if (_shutdownStarted) {
-      throw StateError(
-        _isDisposed
-            ? 'LibraryTransferController is disposed'
-            : 'LibraryTransferController is shutting down',
-      );
+      throw StateError('LibraryTransferController is shutting down');
     }
   }
 

@@ -557,6 +557,22 @@ void main() {
 
       expect(() => controller.startImport(), throwsStateError);
     });
+
+    test(
+      'cancel works during a begun shutdown and throws after dispose',
+      () async {
+        await _startRaycastImport(repository, files, controller);
+        expect(controller.state, isA<LibraryTransferRaycastReview>());
+
+        await controller.beginShutdown();
+        controller.cancel();
+
+        expect(controller.state, const LibraryTransferIdle());
+
+        await controller.dispose();
+        expect(() => controller.cancel(), throwsStateError);
+      },
+    );
   });
   group('backup and application', () {
     test('requires a backup copy for a non-empty library', () async {
