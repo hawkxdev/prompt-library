@@ -1,10 +1,13 @@
 /// Composition root tests.
 library;
 
+import 'dart:io';
+
 import 'dart:ui' show AppExitResponse;
 
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompt_library/src/app/application_surface.dart';
 import 'package:prompt_library/src/app/composition_root.dart';
@@ -14,10 +17,13 @@ import 'package:prompt_library/src/library/data/library_database.dart';
 import 'package:prompt_library/src/library/models/entry_input.dart';
 import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
+import 'package:prompt_library/src/library/presentation/library_document_files.dart';
 import 'package:prompt_library/src/library/presentation/library_haptics.dart';
 import 'package:prompt_library/src/library/presentation/library_share.dart';
 import 'package:prompt_library/src/platform/ios/share_plus_library_share.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_library_screen.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_state.dart';
+import 'package:prompt_library/src/platform/documents/file_selector_document_files.dart';
 import 'package:prompt_library/src/platform/macos/mac_quick_panel_port.dart';
 import 'package:prompt_library/src/platform/macos/method_channel_mac_quick_panel.dart';
 import 'package:prompt_library/src/platform/macos/unavailable_mac_quick_panel.dart';
@@ -65,6 +71,46 @@ void main() {
       throwsStateError,
     );
   });
+
+  test(
+    'production graph owns the transfer boundary over the library',
+    () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      final tempDir = await Directory.systemTemp.createTemp('pl-production');
+      const channel = MethodChannel('plugins.flutter.io/path_provider');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(channel, (call) async => tempDir.path);
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+      final composition = PromptLibraryComposition.production();
+      addTearDown(() => composition.dispose());
+
+      final files = composition.documentFiles;
+      expect(files, isA<FileSelectorDocumentFiles>());
+      expect(
+        (files as FileSelectorDocumentFiles).exportClient,
+        isNotNull,
+        reason: 'production binds the native export client',
+      );
+      final transfer = composition.transferController;
+      expect(transfer, isNotNull);
+      expect(transfer!.state, isA<LibraryTransferIdle>());
+
+      await composition.controller.createEntry(
+        EntryInput.validate(title: 'Graph', body: 'Body'),
+      );
+      await pumpEventQueue();
+
+      await transfer.prepareExport(DocumentExportKind.json);
+
+      expect(
+        transfer.state,
+        isA<LibraryTransferExportReady>(),
+        reason: 'the transfer owner reads the same production database',
+      );
+    },
+  );
 
   testWidgets('passes composition capabilities into the mobile app', (
     tester,

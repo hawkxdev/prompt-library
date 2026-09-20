@@ -12,8 +12,12 @@ import '../library/data/drift_library_repository.dart';
 import '../library/data/library_database.dart';
 import '../library/presentation/library_clipboard.dart';
 import '../library/presentation/library_controller.dart';
+import '../library/presentation/library_document_files.dart';
 import '../library/presentation/library_haptics.dart';
 import '../library/presentation/library_share.dart';
+import '../library/presentation/transfer/library_transfer_controller.dart';
+import '../platform/documents/file_selector_document_files.dart';
+import '../platform/documents/method_channel_document_export.dart';
 import '../platform/ios/share_plus_library_share.dart';
 import '../platform/macos/mac_quick_panel_port.dart';
 import '../platform/macos/method_channel_mac_quick_panel.dart';
@@ -40,6 +44,8 @@ final class PromptLibraryComposition {
     this.haptics = const FlutterLibraryHaptics(),
     QuickPanelController? quickPanelController,
     this.quickAccessSupported = false,
+    this.documentFiles,
+    this.transferController,
   }) : quickPanelController =
            quickPanelController ??
            QuickPanelController(
@@ -62,6 +68,14 @@ final class PromptLibraryComposition {
       clipboard: clipboard,
       port: port,
     );
+    final documentFiles = FileSelectorDocumentFiles(
+      exportClient: MethodChannelDocumentExport().export,
+    );
+    final transferController = LibraryTransferController(
+      repository: repository,
+      library: controller,
+      files: documentFiles,
+    );
     return PromptLibraryComposition(
       applicationSurface: applicationSurface,
       database: database,
@@ -71,6 +85,8 @@ final class PromptLibraryComposition {
       share: share,
       quickPanelController: quickPanelController,
       quickAccessSupported: Platform.isMacOS,
+      documentFiles: documentFiles,
+      transferController: transferController,
     );
   }
 
@@ -119,6 +135,12 @@ final class PromptLibraryComposition {
 
   /// Whether macOS quick settings are exposed.
   final bool quickAccessSupported;
+
+  /// Document file boundary for transfer operations.
+  final LibraryDocumentFiles? documentFiles;
+
+  /// Transfer operation owner.
+  final LibraryTransferController? transferController;
 
   Future<void>? _startFuture;
   Future<void>? _disposeFuture;
