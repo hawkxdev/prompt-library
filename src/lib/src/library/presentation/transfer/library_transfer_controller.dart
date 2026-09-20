@@ -5,6 +5,8 @@ import 'dart:async';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import '../../data/library_repository.dart';
 import '../../models/library_failure.dart';
 import '../../models/library_snapshot.dart';
@@ -64,6 +66,7 @@ final class LibraryTransferController {
   bool _staleDuringOperation = false;
   LibraryFailure? _snapshotFailure;
   Completer<void>? _operationDone;
+  Future<void>? _disposeFuture;
 
   /// Returns the current operation state.
   LibraryTransferState get state => _state;
@@ -73,6 +76,10 @@ final class LibraryTransferController {
 
   /// Completes when the admitted operation releases its resources.
   Future<void> get settled => _operationDone?.future ?? Future<void>.value();
+
+  /// Reports whether prepared export bytes are still held.
+  @visibleForTesting
+  bool get hasPreparedBytes => _preparedBytes != null;
 
   /// Prepares export bytes for [kind] with a default file name.
   Future<void> prepareExport(DocumentExportKind kind) {
@@ -342,10 +349,21 @@ final class LibraryTransferController {
     _emit(const LibraryTransferIdle());
   }
 
-  /// Releases controller resources.
-  Future<void> dispose() async {
-    if (_isDisposed) return;
+  /// Releases controller resources once the started operation settles.
+  ///
+  /// New operations are rejected from the first call, the prepared export
+  /// bytes are dropped before any waiting, and the started operation is
+  /// awaited so the snapshot subscription and the states controller close
+  /// only after the held transaction and admitted copy cycles are gone.
+  Future<void> dispose() {
+    return _disposeFuture ??= _dispose();
+  }
+
+  Future<void> _dispose() async {
     _isDisposed = true;
+    _preparedBytes = null;
+    _preparedKind = null;
+    await settled;
     final subscription = _snapshotSubscription;
     _snapshotSubscription = null;
     await subscription?.cancel();

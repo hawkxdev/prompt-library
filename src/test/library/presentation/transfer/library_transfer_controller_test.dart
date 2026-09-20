@@ -428,6 +428,86 @@ void main() {
       expect(controller.state, isA<LibraryTransferRaycastReview>());
     });
   });
+  group('safe shutdown', () {
+    test(
+      'a late system dialog answer changes no state and throws nothing',
+      () async {
+        await _startRestoreImport(repository, files, controller);
+        await controller.continueFromReview();
+        final gate = Completer<void>();
+        files.exportGate = gate;
+        files.exportResult = DocumentSaved(path: '/tmp/late-copy.json');
+
+        final saving = controller.createBackupCopy();
+        await pumpEventQueue();
+        repository.emit(
+          LibrarySnapshot(
+            entries: [testEntry('kept-1', lastCopiedAt: DateTime.utc(2026))],
+          ),
+        );
+        await pumpEventQueue();
+        final stateBefore = controller.state;
+
+        final disposing = controller.dispose();
+        gate.complete();
+        await saving;
+        await disposing;
+
+        expect(controller.state, stateBefore);
+        expect(controller.state, isA<LibraryTransferBackupRequired>());
+      },
+    );
+
+    test('rejects an operation started after shutdown began', () async {
+      final gate = Completer<void>();
+      files.pickGate = gate;
+      files.pickResult = const DocumentPickCancelled();
+      final picking = controller.startImport();
+      await pumpEventQueue();
+
+      final disposing = controller.dispose();
+      await pumpEventQueue();
+
+      expect(() => controller.startImport(), throwsStateError);
+
+      gate.complete();
+      await picking;
+      await disposing;
+    });
+
+    test('repeated and concurrent dispose calls await one process', () async {
+      final expected = await _startRestoreImport(repository, files, controller);
+      await _verifyThroughBackup(files, controller, expected);
+      final gate = Completer<void>();
+      repository.nextMutationGate = gate;
+      final applying = controller.apply();
+      await pumpEventQueue();
+
+      final first = controller.dispose();
+      final second = controller.dispose();
+      expect(identical(first, second), isTrue);
+
+      var returned = false;
+      unawaited(second.then((_) => returned = true));
+      await pumpEventQueue();
+      expect(returned, isFalse);
+
+      gate.complete();
+      await applying;
+      await first;
+      await second;
+      expect(returned, isTrue);
+    });
+
+    test('dispose cancels the prepared export bytes', () async {
+      await controller.prepareExport(DocumentExportKind.json);
+      expect(controller.hasPreparedBytes, isTrue);
+
+      await controller.dispose();
+
+      expect(controller.hasPreparedBytes, isFalse);
+    });
+  });
   group('backup and application', () {
     test('requires a backup copy for a non-empty library', () async {
       final expected = await _startRestoreImport(repository, files, controller);
@@ -752,26 +832,38 @@ void main() {
       );
     });
 
-    test('dispose during the application releases the barrier', () async {
-      final expected = await _startRestoreImport(repository, files, controller);
-      await _verifyThroughBackup(files, controller, expected);
-      final gate = Completer<void>();
-      repository.nextMutationGate = gate;
+    test(
+      'dispose waits out a held application and releases the barrier',
+      () async {
+        final expected = await _startRestoreImport(
+          repository,
+          files,
+          controller,
+        );
+        await _verifyThroughBackup(files, controller, expected);
+        final gate = Completer<void>();
+        repository.nextMutationGate = gate;
 
-      final applying = controller.apply();
-      await pumpEventQueue();
-      await controller.dispose();
-      final remainedLocked = library.state.isUnderMaintenance;
-      gate.complete();
-      await applying;
-      await pumpEventQueue();
+        final applying = controller.apply();
+        await pumpEventQueue();
 
-      expect(remainedLocked, isTrue);
-      expect(repository.calls, contains('restoreSnapshot'));
-      expect(library.state.isUnderMaintenance, isFalse);
-      final snapshot = await repository.getSnapshot();
-      expect(snapshot.entries.length, 2);
-    });
+        final disposing = controller.dispose();
+        var disposeReturned = false;
+        unawaited(disposing.then((_) => disposeReturned = true));
+        await pumpEventQueue();
+        expect(disposeReturned, isFalse);
+
+        gate.complete();
+        await applying;
+        await disposing;
+        await pumpEventQueue();
+
+        expect(repository.calls, contains('restoreSnapshot'));
+        expect(library.state.isUnderMaintenance, isFalse);
+        final snapshot = await repository.getSnapshot();
+        expect(snapshot.entries.length, 2);
+      },
+    );
 
     test('rejects an oversized pick before decoding', () async {
       final limited = LibraryTransferController(
