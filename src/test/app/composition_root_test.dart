@@ -26,12 +26,15 @@ import 'package:prompt_library/src/library/presentation/library_haptics.dart';
 import 'package:prompt_library/src/library/presentation/library_share.dart';
 import 'package:prompt_library/src/platform/ios/share_plus_library_share.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_library_screen.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
 import 'package:prompt_library/src/library/presentation/transfer/library_transfer_state.dart';
 import 'package:prompt_library/src/platform/documents/file_selector_document_files.dart';
 import 'package:prompt_library/src/platform/macos/mac_quick_panel_port.dart';
 import 'package:prompt_library/src/platform/macos/method_channel_mac_quick_panel.dart';
 import 'package:prompt_library/src/platform/macos/unavailable_mac_quick_panel.dart';
 import 'package:prompt_library/src/platform/macos/quick_panel_controller.dart';
+
+import '../support/library_test_support.dart';
 
 void main() {
   test('selects mobile application surface for iOS', () {
@@ -417,6 +420,55 @@ void main() {
     expect(returned, isFalse);
 
     gate.complete();
+    expect(await voting, AppExitResponse.exit);
+    expect(returned, isTrue);
+  });
+
+  test('exit voting through the composition seam holds and rejects', () async {
+    final database = LibraryDatabase.forTesting(NativeDatabase.memory());
+    final repository = DriftLibraryRepository(database);
+    final controller = LibraryController(repository: repository);
+    final files = TestDocumentFiles();
+    final gate = Completer<void>();
+    files.pickGate = gate;
+    files.pickResult = const DocumentPickCancelled();
+    final transfer = LibraryTransferController(
+      repository: repository,
+      library: controller,
+      files: files,
+    );
+    final composition = PromptLibraryComposition(
+      applicationSurface: ApplicationSurface.desktop,
+      database: database,
+      repository: repository,
+      controller: controller,
+      clipboard: const _NoopClipboard(),
+      transferController: transfer,
+    );
+    addTearDown(() => composition.dispose());
+    final lifecycle = PromptLibraryLifecycle(
+      composition.dispose,
+      beginShutdown: composition.beginTransferShutdown,
+    );
+
+    final picking = transfer.startImport();
+    await pumpEventQueue();
+
+    final voting = lifecycle.requestExit();
+    await pumpEventQueue();
+
+    expect(
+      () => transfer.startImport(),
+      throwsStateError,
+      reason: 'voting through the seam rejects operations started after it',
+    );
+    var returned = false;
+    unawaited(voting.then((_) => returned = true));
+    await pumpEventQueue();
+    expect(returned, isFalse, reason: 'voting awaits the held operation');
+
+    gate.complete();
+    await picking;
     expect(await voting, AppExitResponse.exit);
     expect(returned, isTrue);
   });
