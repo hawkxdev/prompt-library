@@ -429,6 +429,10 @@ void main() {
     });
   });
   group('safe shutdown', () {
+    // Characterization, not a Stage 6B differentiator: this test is green on
+    // the pre-Stage-6B code at 873462c (the _emit guard and the early
+    // _isDisposed return already existed there). It documents the late-answer
+    // contract and must not be counted as proof of the stage.
     test(
       'a late system dialog answer changes no state and throws nothing',
       () async {
@@ -458,6 +462,10 @@ void main() {
       },
     );
 
+    // Characterization, not a Stage 6B differentiator: green on the
+    // pre-Stage-6B code at 873462c, where dispose also rejected later
+    // commands immediately. The voting-time ban is proved by the
+    // shutdown-begun-at-voting test above instead.
     test('rejects an operation started after shutdown began', () async {
       final gate = Completer<void>();
       files.pickGate = gate;
