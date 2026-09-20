@@ -351,14 +351,20 @@ void main() {
     expect(disposeCalls, 1);
   });
 
-  test('request exit awaits the transfer settlement before voting', () async {
+  test('request exit begins the transfer shutdown before voting', () async {
     final gate = Completer<void>();
+    var begun = false;
     final lifecycle = PromptLibraryLifecycle(
       () async {},
-      awaitTransfer: () => gate.future,
+      beginShutdown: () {
+        begun = true;
+        return gate.future;
+      },
     );
 
     final voting = lifecycle.requestExit();
+    await pumpEventQueue();
+    expect(begun, isTrue);
     var returned = false;
     unawaited(voting.then((_) => returned = true));
     await pumpEventQueue();

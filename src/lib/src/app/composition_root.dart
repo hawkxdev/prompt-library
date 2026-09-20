@@ -205,9 +205,9 @@ final class PromptLibraryComposition {
     }
   }
 
-  /// Waits for the started transfer operation to release its resources.
-  Future<void> awaitTransferSettled() async {
-    await transferController?.settled;
+  /// Begins the transfer shutdown and awaits the started operation.
+  Future<void> beginTransferShutdown() {
+    return transferController?.beginShutdown() ?? Future<void>.value();
   }
 }
 
@@ -216,15 +216,15 @@ final class PromptLibraryLifecycle {
   /// Creates a lifecycle coordinator.
   PromptLibraryLifecycle(
     this._dispose, {
-    Future<void> Function()? awaitTransfer,
-  }) : _awaitTransfer = awaitTransfer ?? (() async {});
+    Future<void> Function()? beginShutdown,
+  }) : _beginShutdown = beginShutdown ?? (() async {});
 
   final Future<void> Function() _dispose;
-  final Future<void> Function() _awaitTransfer;
+  final Future<void> Function() _beginShutdown;
 
-  /// Waits for the active transfer operation, then votes to exit.
+  /// Begins the transfer shutdown, waits for it, then votes to exit.
   Future<AppExitResponse> requestExit() async {
-    await _awaitTransfer();
+    await _beginShutdown();
     return AppExitResponse.exit;
   }
 
@@ -259,7 +259,7 @@ final class _PromptLibraryCompositionRootState
     _composition = widget.composition ?? PromptLibraryComposition.production();
     _lifecycle = PromptLibraryLifecycle(
       _composition.dispose,
-      awaitTransfer: _composition.awaitTransferSettled,
+      beginShutdown: _composition.beginTransferShutdown,
     );
     _lifecycleListener = AppLifecycleListener(
       onExitRequested: _lifecycle.requestExit,

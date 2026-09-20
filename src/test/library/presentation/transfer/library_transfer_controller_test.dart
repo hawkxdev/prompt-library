@@ -507,6 +507,48 @@ void main() {
 
       expect(controller.hasPreparedBytes, isFalse);
     });
+
+    test('shutdown begun at voting rejects new operations and awaits the started one', () async {
+      final gate = Completer<void>();
+      files.pickGate = gate;
+      files.pickResult = const DocumentPickCancelled();
+      final picking = controller.startImport();
+      await pumpEventQueue();
+
+      final voting = controller.beginShutdown();
+      expect(() => controller.startImport(), throwsStateError);
+
+      var returned = false;
+      unawaited(voting.then((_) => returned = true));
+      await pumpEventQueue();
+      expect(returned, isFalse);
+
+      gate.complete();
+      await picking;
+      await voting;
+      expect(returned, isTrue);
+    });
+
+    test('canceling the exit re-enables the next operation', () async {
+      await controller.beginShutdown();
+      controller.cancelShutdown();
+
+      files.pickResult = DocumentPicked(
+        fileName: 'snippets.json',
+        bytes: _bytes('[{"name":"Alpha","text":"Body A"}]'),
+      );
+      await controller.startImport();
+
+      expect(controller.state, isA<LibraryTransferRaycastReview>());
+    });
+
+    test('canceling after dispose does not resurrect the controller', () async {
+      await controller.dispose();
+
+      controller.cancelShutdown();
+
+      expect(() => controller.startImport(), throwsStateError);
+    });
   });
   group('backup and application', () {
     test('requires a backup copy for a non-empty library', () async {

@@ -51,6 +51,7 @@ final class LibraryTransferController {
   StreamSubscription<LibrarySnapshot>? _snapshotSubscription;
   LibraryTransferState _state = const LibraryTransferIdle();
   bool _isDisposed = false;
+  bool _shutdownStarted = false;
   bool _busy = false;
 
   LibrarySnapshot? _expected;
@@ -80,6 +81,27 @@ final class LibraryTransferController {
   /// Reports whether prepared export bytes are still held.
   @visibleForTesting
   bool get hasPreparedBytes => _preparedBytes != null;
+
+  /// Begins shutdown: rejects new operations and completes when started one
+  /// settles.
+  ///
+  /// Exit voting calls this before reading the returned future, so an
+  /// operation started after the vote began cannot slip past the wait. The
+  /// ban is idempotent with [dispose] and can be lifted by [cancelShutdown]
+  /// while disposal has not started.
+  Future<void> beginShutdown() {
+    _shutdownStarted = true;
+    return settled;
+  }
+
+  /// Cancels a shutdown that has not reached disposal.
+  ///
+  /// After [dispose] has started the controller stays closed; a canceled
+  /// exit returns it to the working state instead.
+  void cancelShutdown() {
+    if (_isDisposed) return;
+    _shutdownStarted = false;
+  }
 
   /// Prepares export bytes for [kind] with a default file name.
   Future<void> prepareExport(DocumentExportKind kind) {
@@ -360,6 +382,7 @@ final class LibraryTransferController {
   }
 
   Future<void> _dispose() async {
+    _shutdownStarted = true;
     _isDisposed = true;
     _preparedBytes = null;
     _preparedKind = null;
@@ -566,8 +589,12 @@ final class LibraryTransferController {
   }
 
   void _ensureActive() {
-    if (_isDisposed) {
-      throw StateError('LibraryTransferController is disposed');
+    if (_shutdownStarted) {
+      throw StateError(
+        _isDisposed
+            ? 'LibraryTransferController is disposed'
+            : 'LibraryTransferController is shutting down',
+      );
     }
   }
 
