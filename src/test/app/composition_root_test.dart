@@ -261,23 +261,56 @@ void main() {
   );
 
   test('preserves the primary teardown error across failing steps', () async {
-    final release = PromptLibraryComposition.disposeResourcesInOrder(
-      disposeTransfer: () async => throw StateError('primary'),
-      disposeQuickPanel: () async => throw StateError('secondary'),
-      disposeLibrary: () async {},
-      closeDatabase: () async {},
-    );
+    await runZonedGuarded(() async {
+      final release = PromptLibraryComposition.disposeResourcesInOrder(
+        disposeTransfer: () async => throw StateError('primary'),
+        disposeQuickPanel: () async => throw StateError('secondary'),
+        disposeLibrary: () async {},
+        closeDatabase: () async {},
+      );
 
-    await expectLater(
-      release,
-      throwsA(
-        isA<StateError>().having(
-          (error) => error.message,
-          'message',
-          'primary',
+      await expectLater(
+        release,
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'primary',
+          ),
         ),
+      );
+    }, (error, stackTrace) {});
+  });
+
+  test('reports secondary teardown errors to the zone', () async {
+    final zoneErrors = <Object>[];
+
+    await runZonedGuarded(() async {
+      final release = PromptLibraryComposition.disposeResourcesInOrder(
+        disposeTransfer: () async => throw StateError('primary'),
+        disposeQuickPanel: () async => throw StateError('secondary'),
+        disposeLibrary: () async {},
+        closeDatabase: () async {},
+      );
+      await expectLater(
+        release,
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'primary',
+          ),
+        ),
+      );
+    }, (error, stackTrace) => zoneErrors.add(error));
+
+    expect(zoneErrors, [
+      isA<StateError>().having(
+        (error) => error.message,
+        'message',
+        'secondary',
       ),
-    );
+    ]);
   });
 
   test('still closes remaining resources after a step fails', () async {

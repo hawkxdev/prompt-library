@@ -192,6 +192,8 @@ final class PromptLibraryComposition {
           failed = true;
           firstError = error;
           firstStack = stackTrace;
+        } else {
+          Zone.current.handleUncaughtError(error, stackTrace);
         }
       }
     }
