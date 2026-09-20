@@ -82,6 +82,10 @@ final class LibraryTransferController {
   @visibleForTesting
   bool get hasPreparedBytes => _preparedBytes != null;
 
+  /// Returns the currently prepared export bytes, if any.
+  @visibleForTesting
+  Uint8List? get preparedBytes => _preparedBytes;
+
   /// Begins shutdown: rejects new operations and completes when started one
   /// settles.
   ///

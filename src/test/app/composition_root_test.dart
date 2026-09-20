@@ -3,6 +3,8 @@ library;
 
 import 'dart:async';
 
+import 'dart:convert' show utf8;
+
 import 'dart:io';
 
 import 'dart:ui' show AppExitResponse;
@@ -100,7 +102,7 @@ void main() {
       expect(transfer!.state, isA<LibraryTransferIdle>());
 
       await composition.controller.createEntry(
-        EntryInput.validate(title: 'Graph', body: 'Body'),
+        EntryInput.validate(title: 'Graph connectivity', body: 'Body'),
       );
       await pumpEventQueue();
 
@@ -110,6 +112,17 @@ void main() {
         transfer.state,
         isA<LibraryTransferExportReady>(),
         reason: 'the transfer owner reads the same production database',
+      );
+      final bytes = transfer.preparedBytes;
+      expect(bytes, isNotNull);
+      final exported = utf8.decode(bytes!);
+      expect(
+        exported,
+        contains('Graph connectivity'),
+        reason:
+            'the prepared export carries the entry created through the '
+            'composition controller, so the owner is bound to the same '
+            'repository',
       );
     },
   );
