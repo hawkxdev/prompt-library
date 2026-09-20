@@ -1,6 +1,8 @@
 /// Composition root tests.
 library;
 
+import 'dart:async';
+
 import 'dart:io';
 
 import 'dart:ui' show AppExitResponse;
@@ -209,16 +211,92 @@ void main() {
     },
   );
 
-  test('disposes quick, library, and database in exact order', () async {
-    final order = <String>[];
+  test(
+    'disposes transfer, quick, library, and database in exact order',
+    () async {
+      final order = <String>[];
 
-    await PromptLibraryComposition.disposeResourcesInOrder(
-      disposeQuickPanel: () async => order.add('quick'),
-      disposeLibrary: () async => order.add('library'),
-      closeDatabase: () async => order.add('database'),
+      await PromptLibraryComposition.disposeResourcesInOrder(
+        disposeTransfer: () async => order.add('transfer'),
+        disposeQuickPanel: () async => order.add('quick'),
+        disposeLibrary: () async => order.add('library'),
+        closeDatabase: () async => order.add('database'),
+      );
+
+      expect(order, ['transfer', 'quick', 'library', 'database']);
+    },
+  );
+
+  test(
+    'holds the rest of teardown while a transfer transaction is held',
+    () async {
+      final order = <String>[];
+      final gate = Completer<void>();
+
+      final releasing = PromptLibraryComposition.disposeResourcesInOrder(
+        disposeTransfer: () async {
+          order.add('transfer:start');
+          await gate.future;
+          order.add('transfer:end');
+        },
+        disposeQuickPanel: () async => order.add('quick'),
+        disposeLibrary: () async => order.add('library'),
+        closeDatabase: () async => order.add('database'),
+      );
+      await pumpEventQueue();
+
+      expect(order, ['transfer:start']);
+
+      gate.complete();
+      await releasing;
+
+      expect(order, [
+        'transfer:start',
+        'transfer:end',
+        'quick',
+        'library',
+        'database',
+      ]);
+    },
+  );
+
+  test('preserves the primary teardown error across failing steps', () async {
+    final release = PromptLibraryComposition.disposeResourcesInOrder(
+      disposeTransfer: () async => throw StateError('primary'),
+      disposeQuickPanel: () async => throw StateError('secondary'),
+      disposeLibrary: () async {},
+      closeDatabase: () async {},
     );
 
-    expect(order, ['quick', 'library', 'database']);
+    await expectLater(
+      release,
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          'primary',
+        ),
+      ),
+    );
+  });
+
+  test('still closes remaining resources after a step fails', () async {
+    final order = <String>[];
+
+    await expectLater(
+      PromptLibraryComposition.disposeResourcesInOrder(
+        disposeTransfer: () async {
+          order.add('transfer');
+          throw StateError('primary');
+        },
+        disposeQuickPanel: () async => order.add('quick'),
+        disposeLibrary: () async => order.add('library'),
+        closeDatabase: () async => order.add('database'),
+      ),
+      throwsStateError,
+    );
+
+    expect(order, ['transfer', 'quick', 'library', 'database']);
   });
 
   test('selects concrete macOS and unavailable non-macOS ports', () async {
@@ -271,6 +349,24 @@ void main() {
     lifecycle.release();
     await pumpEventQueue();
     expect(disposeCalls, 1);
+  });
+
+  test('request exit awaits the transfer settlement before voting', () async {
+    final gate = Completer<void>();
+    final lifecycle = PromptLibraryLifecycle(
+      () async {},
+      awaitTransfer: () => gate.future,
+    );
+
+    final voting = lifecycle.requestExit();
+    var returned = false;
+    unawaited(voting.then((_) => returned = true));
+    await pumpEventQueue();
+    expect(returned, isFalse);
+
+    gate.complete();
+    expect(await voting, AppExitResponse.exit);
+    expect(returned, isTrue);
   });
 }
 

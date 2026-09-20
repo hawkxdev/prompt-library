@@ -162,34 +162,71 @@ final class PromptLibraryComposition {
 
   Future<void> _dispose() {
     return disposeResourcesInOrder(
+      disposeTransfer: transferController?.dispose,
       disposeQuickPanel: quickPanelController.dispose,
       disposeLibrary: controller.dispose,
       closeDatabase: database.close,
     );
   }
 
-  /// Applies the required quick-controller, library, database teardown order.
+  /// Applies the required transfer, quick, library, database teardown order.
+  ///
+  /// A failing step records the first error and its stack trace and the
+  /// remaining steps still run; the recorded error is rethrown at the end.
   @visibleForTesting
   static Future<void> disposeResourcesInOrder({
+    Future<void> Function()? disposeTransfer,
     required Future<void> Function() disposeQuickPanel,
     required Future<void> Function() disposeLibrary,
     required Future<void> Function() closeDatabase,
   }) async {
-    await disposeQuickPanel();
-    await disposeLibrary();
-    await closeDatabase();
+    Object? firstError;
+    StackTrace? firstStack;
+    var failed = false;
+    Future<void> guarded(Future<void> Function()? step) async {
+      if (step == null) return;
+      try {
+        await step();
+      } catch (error, stackTrace) {
+        if (!failed) {
+          failed = true;
+          firstError = error;
+          firstStack = stackTrace;
+        }
+      }
+    }
+
+    await guarded(disposeTransfer);
+    await guarded(disposeQuickPanel);
+    await guarded(disposeLibrary);
+    await guarded(closeDatabase);
+    if (failed) {
+      Error.throwWithStackTrace(firstError!, firstStack!);
+    }
+  }
+
+  /// Waits for the started transfer operation to release its resources.
+  Future<void> awaitTransferSettled() async {
+    await transferController?.settled;
   }
 }
 
 /// Coordinates exit voting and post-exit release.
 final class PromptLibraryLifecycle {
   /// Creates a lifecycle coordinator.
-  PromptLibraryLifecycle(this._dispose);
+  PromptLibraryLifecycle(
+    this._dispose, {
+    Future<void> Function()? awaitTransfer,
+  }) : _awaitTransfer = awaitTransfer ?? (() async {});
 
   final Future<void> Function() _dispose;
+  final Future<void> Function() _awaitTransfer;
 
-  /// Votes without releasing dependencies.
-  Future<AppExitResponse> requestExit() async => AppExitResponse.exit;
+  /// Waits for the active transfer operation, then votes to exit.
+  Future<AppExitResponse> requestExit() async {
+    await _awaitTransfer();
+    return AppExitResponse.exit;
+  }
 
   /// Releases dependencies after detach or widget teardown.
   void release() {
@@ -220,7 +257,10 @@ final class _PromptLibraryCompositionRootState
   void initState() {
     super.initState();
     _composition = widget.composition ?? PromptLibraryComposition.production();
-    _lifecycle = PromptLibraryLifecycle(_composition.dispose);
+    _lifecycle = PromptLibraryLifecycle(
+      _composition.dispose,
+      awaitTransfer: _composition.awaitTransferSettled,
+    );
     _lifecycleListener = AppLifecycleListener(
       onExitRequested: _lifecycle.requestExit,
       onDetach: _lifecycle.release,
