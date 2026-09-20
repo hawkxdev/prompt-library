@@ -516,6 +516,23 @@ void main() {
       expect(controller.hasPreparedBytes, isFalse);
     });
 
+    test('returns prepared bytes as an independent copy', () async {
+      await controller.prepareExport(DocumentExportKind.json);
+      final bytes = controller.preparedBytes!;
+      expect(controller.hasPreparedBytes, isTrue);
+
+      final again = controller.preparedBytes!;
+
+      expect(
+        again,
+        isNot(same(bytes)),
+        reason:
+            'the getter hands out an independent buffer, so no caller '
+            'can ever alias the controller state',
+      );
+      expect(again, equals(bytes));
+    });
+
     test('shutdown begun at voting rejects new operations and awaits the started one', () async {
       final gate = Completer<void>();
       files.pickGate = gate;

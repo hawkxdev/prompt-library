@@ -82,9 +82,15 @@ final class LibraryTransferController {
   @visibleForTesting
   bool get hasPreparedBytes => _preparedBytes != null;
 
-  /// Returns the currently prepared export bytes, if any.
+  /// Returns an independent copy of the prepared export bytes, if any.
+  ///
+  /// The copy keeps the internal buffer unobservable even if a future byte
+  /// source hands back a modifiable list; today both encoders already
+  /// return unmodifiable views, which is a property of the encoders, not of
+  /// this controller.
   @visibleForTesting
-  Uint8List? get preparedBytes => _preparedBytes;
+  Uint8List? get preparedBytes =>
+      _preparedBytes == null ? null : Uint8List.fromList(_preparedBytes!);
 
   /// Begins shutdown: rejects new operations and completes when started one
   /// settles.
