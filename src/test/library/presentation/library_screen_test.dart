@@ -1011,6 +1011,63 @@ void main() {
     await tester.runAsync(() => transfer.apply());
   }
 
+  testWidgets('restored library starts at the top after replacement', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(
+        entries: [
+          for (var i = 0; i < 100; i++)
+            testEntry('old-$i', title: 'Old ${i.toString().padLeft(3, '0')}'),
+        ],
+      ),
+    );
+    await pumpState(tester);
+    await tester.fling(
+      find.byType(ListView),
+      const Offset(0, -800),
+      1000,
+      warnIfMissed: false,
+    );
+    await pumpState(tester);
+
+    await tester.tap(find.byKey(const Key('library-transfer')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    await driveRestoreFlow(
+      tester,
+      LibrarySnapshot(
+        entries: [
+          for (var i = 0; i < 100; i++)
+            testEntry(
+              'new-$i',
+              title: 'Restored ${i.toString().padLeft(3, '0')}',
+            ),
+        ],
+      ),
+    );
+    await pumpState(tester);
+    await tester.tap(find.byKey(const Key('transfer-restore-done-button')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(controller.state.selectedEntryId, 'new-0');
+    final restoredRow = find.descendant(
+      of: find.byType(ListView).first,
+      matching: find.text('Restored 000'),
+    );
+    expect(
+      restoredRow,
+      findsOneWidget,
+      reason: 'the row of the selected first restored entry is built',
+    );
+    final rowRect = tester.getRect(restoredRow);
+    final listRect = tester.getRect(find.byType(ListView).first);
+    expect(rowRect.top, greaterThanOrEqualTo(listRect.top));
+    expect(rowRect.bottom, lessThanOrEqualTo(listRect.bottom));
+  });
+
   testWidgets('replacement resets search, filter, and selection', (
     tester,
   ) async {

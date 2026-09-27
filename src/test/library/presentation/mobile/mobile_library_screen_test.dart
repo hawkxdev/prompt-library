@@ -1632,6 +1632,78 @@ void main() {
     await disposeApp(tester);
   });
 
+  testWidgets('restored library starts at the top after replacement', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(
+        entries: [
+          for (var i = 0; i < 100; i++)
+            testEntry('old-$i', title: 'Old ${i.toString().padLeft(3, '0')}'),
+        ],
+      ),
+    );
+    await pumpState(tester);
+    await tester.fling(
+      find.byKey(const Key('mobile-library-list')),
+      const Offset(0, -800),
+      1000,
+    );
+    await pumpState(tester);
+
+    await tester.tap(find.byKey(const Key('mobile-transfer-button')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    files.pickResult = DocumentPicked(
+      fileName: 'library.json',
+      bytes: LibraryJsonCodec().encode(
+        LibraryDocument(
+          snapshot: LibrarySnapshot(
+            entries: [
+              for (var i = 0; i < 100; i++)
+                testEntry(
+                  'new-$i',
+                  title: 'Restored ${i.toString().padLeft(3, '0')}',
+                ),
+            ],
+          ),
+          exportedAt: DateTime.utc(2026),
+        ),
+      ),
+    );
+    await tester.runAsync(() => transfer.startImport());
+    await tester.runAsync(() => transfer.continueFromReview());
+    files.exportResult = DocumentSaved(path: '/tmp/backup.json');
+    await tester.runAsync(() => transfer.createBackupCopy());
+    final current = await repository.getSnapshot();
+    files.pickResult = DocumentPicked(
+      fileName: 'backup.json',
+      bytes: LibraryJsonCodec().encode(
+        LibraryDocument(snapshot: current, exportedAt: DateTime.utc(2026)),
+      ),
+    );
+    await tester.runAsync(() => transfer.verifyBackupCopy());
+    await tester.runAsync(() => transfer.apply());
+    await pumpState(tester);
+    await tester.tap(find.byKey(const Key('transfer-restore-done-button')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    final firstRow = find.byKey(const Key('mobile-entry-new-0'));
+    expect(
+      firstRow,
+      findsOneWidget,
+      reason: 'the first restored row is built at the top of the list',
+    );
+    final rowRect = tester.getRect(firstRow);
+    final listRect = tester.getRect(
+      find.byKey(const Key('mobile-library-list')),
+    );
+    expect(rowRect.top, greaterThanOrEqualTo(listRect.top));
+    expect(rowRect.bottom, lessThanOrEqualTo(listRect.bottom));
+  });
+
   // === Transfer entry point ===
 
   testWidgets('mobile transfer entry opens the route with an empty library', (

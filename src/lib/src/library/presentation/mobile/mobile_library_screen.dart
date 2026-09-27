@@ -65,6 +65,7 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
   late final StreamSubscription<LibraryTransferState> _transferSubscription;
   late final TextEditingController _searchController;
   late final MobileLibraryActions _actions;
+  final ScrollController _listScrollController = ScrollController();
   MobileLibraryMode _mode = MobileLibraryMode.all;
 
   @override
@@ -96,6 +97,7 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
           _searchController.clear();
           _mode = MobileLibraryMode.all;
         });
+        _resetListScroll();
       }
     });
   }
@@ -105,7 +107,16 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
     unawaited(_subscription.cancel());
     unawaited(_transferSubscription.cancel());
     _searchController.dispose();
+    _listScrollController.dispose();
     super.dispose();
+  }
+
+  /// Returns the list to its start after a replacement.
+  void _resetListScroll() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_listScrollController.hasClients) return;
+      _listScrollController.jumpTo(0);
+    });
   }
 
   /// Whether any filter narrows the current result.
@@ -250,6 +261,7 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
   Widget _buildList(List<Entry> entries) {
     return ListView.builder(
       key: const Key('mobile-library-list'),
+      controller: _listScrollController,
       itemCount: entries.length,
       itemBuilder: (context, index) => _buildRow(entries[index]),
     );

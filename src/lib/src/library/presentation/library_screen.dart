@@ -87,6 +87,7 @@ final class _LibraryScreenState extends State<LibraryScreen> {
           _searchController.clear();
           _showNarrowDetail = false;
         });
+        _resetListScroll();
       }
     });
   }
@@ -209,6 +210,14 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     widget.controller.selectEntry(entry.id);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) unawaited(_ensureSelectionVisible(entry.id));
+    });
+  }
+
+  /// Returns the result list to its start after a replacement.
+  void _resetListScroll() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_listScrollController.hasClients) return;
+      _listScrollController.jumpTo(0);
     });
   }
 
