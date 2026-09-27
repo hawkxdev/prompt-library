@@ -11,6 +11,7 @@ import '../library/presentation/library_haptics.dart';
 import '../library/presentation/library_screen.dart';
 import '../library/presentation/library_share.dart';
 import '../library/presentation/mobile/mobile_library_screen.dart';
+import '../library/presentation/transfer/library_transfer_controller.dart';
 import '../platform/macos/hotkey_settings_dialog.dart';
 import '../platform/macos/quick_mode_view.dart';
 import '../platform/macos/quick_panel_controller.dart';
@@ -24,6 +25,7 @@ final class PromptLibraryApp extends StatefulWidget {
     required this.applicationSurface,
     required this.controller,
     required this.clipboard,
+    required this.transferController,
     this.share = const UnavailableLibraryShare(),
     this.haptics = const FlutterLibraryHaptics(),
     this.quickPanelController,
@@ -42,6 +44,9 @@ final class PromptLibraryApp extends StatefulWidget {
 
   /// Exact clipboard boundary.
   final LibraryClipboard clipboard;
+
+  /// Transfer operation owner shared by all surfaces.
+  final LibraryTransferController transferController;
 
   /// System sharing boundary.
   final LibraryShare share;

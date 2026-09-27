@@ -4,6 +4,7 @@ import 'package:prompt_library/src/library/models/entry.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
 import 'package:prompt_library/src/platform/macos/mac_quick_panel_port.dart';
 import 'package:prompt_library/src/platform/macos/quick_panel_controller.dart';
 import 'package:prompt_library/src/platform/macos/quick_panel_delay.dart';
@@ -24,6 +25,7 @@ final class QuickPanelWidgetHarness {
       port: port,
       delay: delay,
     );
+    transfer = testTransferController(repository, library);
   }
 
   /// Product default shortcut.
@@ -38,6 +40,7 @@ final class QuickPanelWidgetHarness {
   final WidgetControlledQuickPanelDelay delay;
   late final LibraryController library;
   late final QuickPanelController quick;
+  late final LibraryTransferController transfer;
 
   /// Seeds entries, initializes quick access, and emits one host request.
   Future<void> enterQuick(Iterable<Entry> entries) async {
@@ -49,6 +52,7 @@ final class QuickPanelWidgetHarness {
   /// Releases every owned resource.
   Future<void> dispose() async {
     await quick.dispose();
+    await transfer.dispose();
     await library.dispose();
     await repository.close();
     await port.close();

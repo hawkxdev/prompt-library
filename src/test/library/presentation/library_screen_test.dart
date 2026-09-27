@@ -12,21 +12,25 @@ import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
 import 'package:prompt_library/src/library/presentation/library_detail.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
 
 import '../../support/library_test_support.dart';
 
 void main() {
   late TestLibraryRepository repository;
   late LibraryController controller;
+  late LibraryTransferController transfer;
   late _TestClipboard clipboard;
 
   setUp(() {
     repository = TestLibraryRepository();
     controller = LibraryController(repository: repository);
+    transfer = testTransferController(repository, controller);
     clipboard = _TestClipboard();
   });
 
   tearDown(() async {
+    await transfer.dispose();
     await controller.dispose();
     await repository.close();
   });
@@ -37,6 +41,7 @@ void main() {
         applicationSurface: ApplicationSurface.desktop,
         controller: controller,
         clipboard: clipboard,
+        transferController: transfer,
       ),
     );
   }

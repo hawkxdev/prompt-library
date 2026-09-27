@@ -8,6 +8,7 @@ import 'package:prompt_library/src/app/prompt_library_app.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
 import 'package:prompt_library/src/platform/macos/quick_mode_view.dart';
 import 'package:prompt_library/src/platform/macos/quick_panel_controller.dart';
 import 'package:prompt_library/src/platform/macos/unavailable_mac_quick_panel.dart';
@@ -18,13 +19,16 @@ import 'support/library_test_support.dart';
 void main() {
   late TestLibraryRepository repository;
   late LibraryController controller;
+  late LibraryTransferController transfer;
 
   setUp(() {
     repository = TestLibraryRepository();
     controller = LibraryController(repository: repository);
+    transfer = testTransferController(repository, controller);
   });
 
   tearDown(() async {
+    await transfer.dispose();
     await controller.dispose();
     await repository.close();
   });
@@ -45,6 +49,7 @@ void main() {
         applicationSurface: applicationSurface,
         controller: controller,
         clipboard: const _NoopClipboard(),
+        transferController: transfer,
         quickPanelController: quick,
         quickAccessSupported: false,
       ),
@@ -106,6 +111,7 @@ void main() {
         applicationSurface: ApplicationSurface.mobile,
         controller: quickHarness.library,
         clipboard: quickHarness.clipboard,
+        transferController: quickHarness.transfer,
         quickPanelController: quickHarness.quick,
         quickAccessSupported: false,
       ),
@@ -139,6 +145,7 @@ void main() {
         applicationSurface: ApplicationSurface.desktop,
         controller: quickHarness.library,
         clipboard: quickHarness.clipboard,
+        transferController: quickHarness.transfer,
         quickPanelController: quickHarness.quick,
         quickAccessSupported: true,
       ),

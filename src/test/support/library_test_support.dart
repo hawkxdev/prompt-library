@@ -13,7 +13,9 @@ import 'package:prompt_library/src/library/models/entry_update.dart';
 import 'package:prompt_library/src/library/models/library_failure.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/models/tag.dart';
+import 'package:prompt_library/src/library/presentation/library_controller.dart';
 import 'package:prompt_library/src/library/presentation/library_document_files.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
 
 /// Controllable in-memory repository.
 final class TestLibraryRepository implements LibraryRepository {
@@ -423,6 +425,18 @@ Tag testTag(String id, String name) {
     name: name,
     normalizedName: name.toLowerCase(),
     createdAt: DateTime.utc(2026),
+  );
+}
+
+/// Creates a transfer owner over the fake repository.
+LibraryTransferController testTransferController(
+  LibraryRepository repository,
+  LibraryController controller,
+) {
+  return LibraryTransferController(
+    repository: repository,
+    library: controller,
+    files: TestDocumentFiles(),
   );
 }
 

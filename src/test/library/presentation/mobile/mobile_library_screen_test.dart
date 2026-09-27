@@ -19,6 +19,7 @@ import 'package:prompt_library/src/library/presentation/library_haptics.dart';
 import 'package:prompt_library/src/library/presentation/library_share.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_entry_detail_screen.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_library_actions.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
 
 import '../../../support/library_test_support.dart';
 
@@ -27,6 +28,7 @@ void main() {
 
   late TestLibraryRepository repository;
   late LibraryController controller;
+  late LibraryTransferController transfer;
   late _RecordingClipboard clipboard;
   late _RecordingHaptics haptics;
   late MobileLibraryActions actions;
@@ -34,6 +36,7 @@ void main() {
   setUp(() {
     repository = TestLibraryRepository();
     controller = LibraryController(repository: repository);
+    transfer = testTransferController(repository, controller);
     clipboard = _RecordingClipboard();
     haptics = _RecordingHaptics();
     actions = MobileLibraryActions(
@@ -45,6 +48,7 @@ void main() {
   });
 
   tearDown(() async {
+    await transfer.dispose();
     await controller.dispose();
     await repository.close();
   });
@@ -63,6 +67,7 @@ void main() {
         applicationSurface: ApplicationSurface.mobile,
         controller: controller,
         clipboard: clipboard,
+        transferController: transfer,
         haptics: haptics,
       ),
     );

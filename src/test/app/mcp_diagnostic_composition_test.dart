@@ -1,12 +1,16 @@
 /// MCP diagnostic composition tests.
 library;
 
+import 'dart:convert' show utf8;
+
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompt_library/src/app/application_surface.dart';
 import 'package:prompt_library/src/app/mcp_diagnostic_composition.dart';
 import 'package:prompt_library/src/library/data/library_database.dart';
 import 'package:prompt_library/src/library/models/library_failure.dart';
+import 'package:prompt_library/src/library/presentation/library_document_files.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_state.dart';
 
 void main() {
   test('uses isolated synthetic data for MCP diagnostics', () async {
@@ -60,6 +64,34 @@ void main() {
     expect(compactEntry.isArchived, isFalse);
     expect(category.name, 'MCP Category');
     expect(tag.name, 'MCP Tag');
+  });
+
+  test('diagnostic graph owns the transfer over the same database', () async {
+    final composition = await createMcpDiagnosticComposition();
+    addTearDown(composition.dispose);
+    final transfer = composition.transferController;
+
+    await transfer.prepareExport(DocumentExportKind.json);
+
+    expect(transfer.state, isA<LibraryTransferExportReady>());
+    final exported = utf8.decode(transfer.preparedBytes!);
+    expect(
+      exported,
+      contains('Long Diagnostic Prompt'),
+      reason: 'the diagnostic transfer owner reads the synthetic library',
+    );
+  });
+
+  test('closing the diagnostic composition runs the transfer step', () async {
+    final composition = await createMcpDiagnosticComposition();
+
+    await composition.dispose();
+
+    expect(
+      () => composition.transferController.cancel(),
+      throwsStateError,
+      reason: 'the composition teardown closed the transfer owner',
+    );
   });
 
   test('closes the database when synthetic seeding fails', () async {

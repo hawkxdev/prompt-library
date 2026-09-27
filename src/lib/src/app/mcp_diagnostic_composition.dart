@@ -8,6 +8,9 @@ import '../library/data/library_database.dart';
 import '../library/models/entry_input.dart';
 import '../library/presentation/library_clipboard.dart';
 import '../library/presentation/library_controller.dart';
+import '../library/presentation/transfer/library_transfer_controller.dart';
+import '../platform/documents/file_selector_document_files.dart';
+import '../platform/documents/method_channel_document_export.dart';
 import 'application_surface.dart';
 import 'composition_root.dart';
 
@@ -56,12 +59,23 @@ Future<PromptLibraryComposition> createMcpDiagnosticComposition({
       ),
     );
 
+    final controller = LibraryController(repository: repository);
+    final documentFiles = FileSelectorDocumentFiles(
+      exportClient: MethodChannelDocumentExport().export,
+    );
+
     return PromptLibraryComposition(
       applicationSurface: ApplicationSurface.desktop,
       database: diagnosticDatabase,
       repository: repository,
-      controller: LibraryController(repository: repository),
+      controller: controller,
       clipboard: FlutterLibraryClipboard(),
+      documentFiles: documentFiles,
+      transferController: LibraryTransferController(
+        repository: repository,
+        library: controller,
+        files: documentFiles,
+      ),
     );
   } catch (error, stackTrace) {
     try {

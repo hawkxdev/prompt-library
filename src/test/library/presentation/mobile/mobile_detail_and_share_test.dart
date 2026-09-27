@@ -19,6 +19,7 @@ import 'package:prompt_library/src/library/presentation/library_state.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_entry_detail_screen.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_library_actions.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_library_screen.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
 
 import '../../../support/library_test_support.dart';
 
@@ -72,15 +73,18 @@ void main() {
 
   late TestLibraryRepository repository;
   late LibraryController controller;
+  late LibraryTransferController transfer;
   late _RecordingShare share;
 
   setUp(() {
     repository = TestLibraryRepository();
     controller = LibraryController(repository: repository);
+    transfer = testTransferController(repository, controller);
     share = _RecordingShare();
   });
 
   tearDown(() async {
+    await transfer.dispose();
     await controller.dispose();
     await repository.close();
   });
@@ -158,6 +162,7 @@ void main() {
         applicationSurface: ApplicationSurface.mobile,
         controller: controller,
         clipboard: const _NoopClipboard(),
+        transferController: transfer,
         share: share,
         haptics: const _NoopHaptics(),
       ),

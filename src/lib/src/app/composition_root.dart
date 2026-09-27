@@ -40,12 +40,12 @@ final class PromptLibraryComposition {
     required this.repository,
     required this.controller,
     required this.clipboard,
+    required this.documentFiles,
+    required this.transferController,
     this.share = const UnavailableLibraryShare(),
     this.haptics = const FlutterLibraryHaptics(),
     QuickPanelController? quickPanelController,
     this.quickAccessSupported = false,
-    this.documentFiles,
-    this.transferController,
   }) : quickPanelController =
            quickPanelController ??
            QuickPanelController(
@@ -137,10 +137,10 @@ final class PromptLibraryComposition {
   final bool quickAccessSupported;
 
   /// Document file boundary for transfer operations.
-  final LibraryDocumentFiles? documentFiles;
+  final LibraryDocumentFiles documentFiles;
 
   /// Transfer operation owner.
-  final LibraryTransferController? transferController;
+  final LibraryTransferController transferController;
 
   Future<void>? _startFuture;
   Future<void>? _disposeFuture;
@@ -162,7 +162,7 @@ final class PromptLibraryComposition {
 
   Future<void> _dispose() {
     return disposeResourcesInOrder(
-      disposeTransfer: transferController?.dispose,
+      disposeTransfer: transferController.dispose,
       disposeQuickPanel: quickPanelController.dispose,
       disposeLibrary: controller.dispose,
       closeDatabase: database.close,
@@ -175,7 +175,7 @@ final class PromptLibraryComposition {
   /// remaining steps still run; the recorded error is rethrown at the end.
   @visibleForTesting
   static Future<void> disposeResourcesInOrder({
-    Future<void> Function()? disposeTransfer,
+    required Future<void> Function() disposeTransfer,
     required Future<void> Function() disposeQuickPanel,
     required Future<void> Function() disposeLibrary,
     required Future<void> Function() closeDatabase,
@@ -183,8 +183,7 @@ final class PromptLibraryComposition {
     Object? firstError;
     StackTrace? firstStack;
     var failed = false;
-    Future<void> guarded(Future<void> Function()? step) async {
-      if (step == null) return;
+    Future<void> guarded(Future<void> Function() step) async {
       try {
         await step();
       } catch (error, stackTrace) {
@@ -209,7 +208,7 @@ final class PromptLibraryComposition {
 
   /// Begins the transfer shutdown and awaits the started operation.
   Future<void> beginTransferShutdown() {
-    return transferController?.beginShutdown() ?? Future<void>.value();
+    return transferController.beginShutdown();
   }
 }
 
@@ -283,6 +282,7 @@ final class _PromptLibraryCompositionRootState
       applicationSurface: _composition.applicationSurface,
       controller: _composition.controller,
       clipboard: _composition.clipboard,
+      transferController: _composition.transferController,
       share: _composition.share,
       haptics: _composition.haptics,
       quickPanelController: _composition.quickPanelController,

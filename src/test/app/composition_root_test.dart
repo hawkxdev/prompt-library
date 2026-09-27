@@ -49,12 +49,15 @@ void main() {
     final database = LibraryDatabase.forTesting(NativeDatabase.memory());
     final repository = DriftLibraryRepository(database);
     final controller = LibraryController(repository: repository);
+    final transfer = testTransferController(repository, controller);
     final composition = PromptLibraryComposition(
       applicationSurface: ApplicationSurface.desktop,
       database: database,
       repository: repository,
       controller: controller,
       clipboard: const _NoopClipboard(),
+      documentFiles: TestDocumentFiles(),
+      transferController: transfer,
     );
 
     expect(composition.applicationSurface, ApplicationSurface.desktop);
@@ -102,7 +105,7 @@ void main() {
       );
       final transfer = composition.transferController;
       expect(transfer, isNotNull);
-      expect(transfer!.state, isA<LibraryTransferIdle>());
+      expect(transfer.state, isA<LibraryTransferIdle>());
 
       await composition.controller.createEntry(
         EntryInput.validate(title: 'Graph connectivity', body: 'Body'),
@@ -144,6 +147,8 @@ void main() {
       repository: repository,
       controller: controller,
       clipboard: const _NoopClipboard(),
+      documentFiles: TestDocumentFiles(),
+      transferController: testTransferController(repository, controller),
       share: share,
       haptics: haptics,
     );
@@ -153,6 +158,7 @@ void main() {
         applicationSurface: composition.applicationSurface,
         controller: composition.controller,
         clipboard: composition.clipboard,
+        transferController: composition.transferController,
         share: composition.share,
         haptics: composition.haptics,
       ),
@@ -191,6 +197,8 @@ void main() {
         repository: repository,
         controller: controller,
         clipboard: clipboard,
+        documentFiles: TestDocumentFiles(),
+        transferController: testTransferController(repository, controller),
         quickPanelController: quick,
         quickAccessSupported: true,
       );
@@ -443,6 +451,7 @@ void main() {
       repository: repository,
       controller: controller,
       clipboard: const _NoopClipboard(),
+      documentFiles: files,
       transferController: transfer,
     );
     addTearDown(() => composition.dispose());
