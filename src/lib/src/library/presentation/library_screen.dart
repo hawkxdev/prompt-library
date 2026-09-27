@@ -21,6 +21,8 @@ import 'library_shortcuts.dart';
 import 'library_sidebar.dart';
 import 'library_state.dart';
 import 'taxonomy_dialog.dart';
+import 'transfer/library_transfer_controller.dart';
+import 'transfer/library_transfer_screen.dart';
 
 /// Complete full-library experience.
 final class LibraryScreen extends StatefulWidget {
@@ -28,6 +30,7 @@ final class LibraryScreen extends StatefulWidget {
   const LibraryScreen({
     required this.controller,
     required this.clipboard,
+    required this.transfer,
     this.onConfigureHotKey,
     super.key,
   });
@@ -37,6 +40,9 @@ final class LibraryScreen extends StatefulWidget {
 
   /// Exact clipboard boundary.
   final LibraryClipboard clipboard;
+
+  /// Shared transfer operation owner.
+  final LibraryTransferController transfer;
 
   /// Optional macOS global-shortcut settings action.
   final VoidCallback? onConfigureHotKey;
@@ -242,6 +248,18 @@ final class _LibraryScreenState extends State<LibraryScreen> {
     }
   }
 
+  /// Opens the transfer operation route over the shared owner.
+  Future<void> _openTransfer() {
+    return Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: const Text('Transfer library')),
+          body: LibraryTransferScreen(transfer: widget.transfer),
+        ),
+      ),
+    );
+  }
+
   /// Builds application shortcuts, actions and the screen body.
   @override
   Widget build(BuildContext context) {
@@ -384,6 +402,12 @@ final class _LibraryScreenState extends State<LibraryScreen> {
                   controller: widget.controller,
                 ),
                 icon: const Icon(Icons.add),
+              ),
+              IconButton(
+                key: const Key('library-transfer'),
+                tooltip: 'Transfer library',
+                onPressed: _openTransfer,
+                icon: const Icon(Icons.swap_horiz),
               ),
               if (widget.onConfigureHotKey != null)
                 IconButton(

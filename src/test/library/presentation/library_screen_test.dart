@@ -12,7 +12,9 @@ import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
 import 'package:prompt_library/src/library/presentation/library_detail.dart';
+import 'package:prompt_library/src/library/presentation/library_document_files.dart';
 import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_screen.dart';
 
 import '../../support/library_test_support.dart';
 
@@ -601,6 +603,252 @@ void main() {
     await pending;
     await disposeApp(tester);
   });
+
+  // === Transfer entry point ===
+
+  testWidgets('transfer entry opens the route with an empty library', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    repository.emit(const LibrarySnapshot.empty());
+    await pumpState(tester);
+
+    expect(find.byKey(const Key('library-transfer')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('library-transfer')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(
+      find.descendant(
+        of: find.byType(AppBar),
+        matching: find.text('Transfer library'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Export JSON'), findsOneWidget);
+    expect(find.byType(LibraryTransferScreen), findsOneWidget);
+
+    await tester.pageBack();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(LibraryTransferScreen), findsNothing);
+    expect(find.text('Your library is empty'), findsOneWidget);
+    await disposeApp(tester);
+  });
+
+  testWidgets('transfer entry opens from wide and narrow windows', (
+    tester,
+  ) async {
+    for (final size in [const Size(1200, 800), const Size(700, 800)]) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      await pumpApp(tester);
+      repository.emit(
+        LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+      );
+      await pumpState(tester);
+
+      expect(find.byKey(const Key('library-transfer')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('library-transfer')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.byType(LibraryTransferScreen), findsOneWidget);
+      expect(find.text('Export JSON'), findsOneWidget);
+
+      await disposeApp(tester);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+  });
+
+  testWidgets('re-entering the transfer route shows the current owner state', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+    await tester.runAsync(
+      () => transfer.prepareExport(DocumentExportKind.json),
+    );
+    await pumpState(tester);
+
+    await tester.tap(find.byKey(const Key('library-transfer')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      find.byKey(const Key('transfer-export-name')),
+      findsOneWidget,
+      reason: 'the opened route shows the owner state, not a fresh screen',
+    );
+
+    await tester.pageBack();
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('library-transfer')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('transfer-export-name')),
+      findsOneWidget,
+      reason: 're-entering shows the state that survived the route closure',
+    );
+    expect(find.byKey(const Key('transfer-idle')), findsNothing);
+    await disposeApp(tester);
+  });
+
+  testWidgets('transfer entry is unreachable while the editor dialog is open', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+
+    await tester.tap(find.byTooltip('New prompt'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('New prompt'), findsOneWidget);
+    expect(
+      find.byType(ModalBarrier),
+      findsWidgets,
+      reason: 'the modal barrier covers the transfer entry',
+    );
+
+    await tester.tap(
+      find.byKey(const Key('library-transfer')),
+      warnIfMissed: false,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(
+      find.byType(LibraryTransferScreen),
+      findsNothing,
+      reason: 'the dialog intercepts the tap, so no transfer route opens',
+    );
+    await disposeApp(tester);
+  });
+
+  testWidgets('transfer entry is unreachable while the delete dialog is open', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+
+    await tester.tap(find.byTooltip('Delete'));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('Delete prompt?'), findsOneWidget);
+    expect(
+      find.byType(ModalBarrier),
+      findsWidgets,
+      reason: 'the modal barrier covers the transfer entry',
+    );
+
+    await tester.tap(
+      find.byKey(const Key('library-transfer')),
+      warnIfMissed: false,
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(
+      find.byType(LibraryTransferScreen),
+      findsNothing,
+      reason: 'the dialog intercepts the tap, so no transfer route opens',
+    );
+    await disposeApp(tester);
+  });
+
+  testWidgets('transfer entry announces its tooltip', (tester) async {
+    final handle = tester.ensureSemantics();
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+
+    expect(
+      tester.getSemantics(find.byKey(const Key('library-transfer'))).tooltip,
+      'Transfer library',
+    );
+    handle.dispose();
+    await disposeApp(tester);
+  });
+
+  testWidgets('keyboard traversal reaches the transfer entry and opens it', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+
+    var focused = _focusInside(const Key('library-transfer'));
+    for (var i = 0; i < 12 && !focused; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      focused = _focusInside(const Key('library-transfer'));
+    }
+    expect(focused, isTrue, reason: 'Tab reaches the transfer entry');
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(LibraryTransferScreen), findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pump();
+    await disposeApp(tester);
+  });
+
+  testWidgets('action row with the transfer entry survives large text', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(700, 800);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 3.1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.platformDispatcher.clearAllTestValues);
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+
+    expect(tester.takeException(), isNull);
+    expect(
+      tester.getSize(find.byKey(const Key('library-transfer'))).width,
+      greaterThan(0),
+      reason: 'the entry keeps a positive size at the accessibility scale',
+    );
+    await disposeApp(tester);
+  });
+}
+
+/// Reports whether keyboard focus sits inside the widget carrying [key].
+bool _focusInside(Key key) {
+  final context = FocusManager.instance.primaryFocus?.context;
+  if (context == null) return false;
+  var found = false;
+  context.visitAncestorElements((element) {
+    if (element.widget.key == key) {
+      found = true;
+      return false;
+    }
+    return true;
+  });
+  return found;
 }
 
 /// Recording clipboard fake.

@@ -171,6 +171,7 @@ final class _PromptLibraryAppState extends State<PromptLibraryApp> {
       builder: (context) => LibraryScreen(
         controller: widget.controller,
         clipboard: widget.clipboard,
+        transfer: widget.transferController,
         onConfigureHotKey: widget.quickAccessSupported && quick != null
             ? () => showHotKeySettingsDialog(context, controller: quick)
             : null,
