@@ -487,6 +487,41 @@ void main() {
     },
   );
 
+  testWidgets('the app receives the composition transfer owner', (
+    tester,
+  ) async {
+    final database = LibraryDatabase.forTesting(NativeDatabase.memory());
+    final repository = DriftLibraryRepository(database);
+    final controller = LibraryController(repository: repository);
+    final composition = PromptLibraryComposition(
+      applicationSurface: ApplicationSurface.desktop,
+      database: database,
+      repository: repository,
+      controller: controller,
+      clipboard: const _NoopClipboard(),
+      documentFiles: TestDocumentFiles(),
+      transferController: testTransferController(repository, controller),
+    );
+
+    await tester.pumpWidget(
+      PromptLibraryCompositionRoot(composition: composition),
+    );
+    await tester.pump();
+
+    final app = tester.widget<PromptLibraryApp>(find.byType(PromptLibraryApp));
+    expect(
+      identical(app.transferController, composition.transferController),
+      isTrue,
+      reason:
+          'the transfer route must reuse the composition owner, so state '
+          'survives route closure across surfaces',
+    );
+
+    await tester.runAsync(composition.dispose);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
   test('exit voting through the composition seam holds and rejects', () async {
     final database = LibraryDatabase.forTesting(NativeDatabase.memory());
     final repository = DriftLibraryRepository(database);
