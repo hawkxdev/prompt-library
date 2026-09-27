@@ -35,6 +35,7 @@ final class LibraryTransferScreen extends StatefulWidget {
 final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
   late LibraryTransferState _state;
   late StreamSubscription<LibraryTransferState> _subscription;
+  String? _shutdownNotice;
 
   @override
   void initState() {
@@ -73,7 +74,28 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
   /// The latest request is read at tap time, so a second choice made before
   /// the first recalculation publishes keeps both choices.
   void _choose(RaycastSelection Function(RaycastSelection latest) change) {
-    widget.transfer.updateSelection(change(widget.transfer.raycastSelection));
+    _runOperationGuarded(
+      () => widget.transfer.updateSelection(
+        change(widget.transfer.raycastSelection),
+      ),
+    );
+  }
+
+  /// Runs one operation-opening action, reporting a shutdown refusal.
+  ///
+  /// Only [LibraryTransferShuttingDown] is translated into the visible
+  /// notice; every other error keeps propagating to its owner.
+  Future<void> _runOperationGuarded(Future<void> Function() action) async {
+    try {
+      await action();
+    } on LibraryTransferShuttingDown {
+      if (mounted) {
+        setState(() {
+          _shutdownNotice =
+              'The application is closing. The operation was not started.';
+        });
+      }
+    }
   }
 
   @override
@@ -81,38 +103,70 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 640;
+        final notice = _shutdownNotice;
         final body = Padding(
           padding: const EdgeInsets.all(16),
-          child: switch (_state) {
-            LibraryTransferIdle() => _scroll(_buildIdle(context)),
-            LibraryTransferExportReady() => _scroll(_buildExportReady(context)),
-            LibraryTransferRestoreReview done => _buildRestoreReview(done.plan),
-            LibraryTransferRaycastReview done => _buildRaycastReview(done.plan),
-            LibraryTransferBackupRequired done => _scroll(
-              _buildBackupRequired(done),
-            ),
-            LibraryTransferBackupSaved done => _scroll(_buildBackupSaved(done)),
-            LibraryTransferBackupVerified done => _scroll(
-              _buildBackupVerified(done),
-            ),
-            LibraryTransferStale() => _scroll(
-              _buildMessage(
-                context,
-                'The library changed during the operation.'
-                ' Start a new review to continue.',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (notice != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Semantics(
+                    liveRegion: true,
+                    child: Text(
+                      notice,
+                      key: const Key('transfer-shutdown-notice'),
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                ),
+              Expanded(
+                child: switch (_state) {
+                  LibraryTransferIdle() => _scroll(_buildIdle(context)),
+                  LibraryTransferExportReady() => _scroll(
+                    _buildExportReady(context),
+                  ),
+                  LibraryTransferRestoreReview done => _buildRestoreReview(
+                    done.plan,
+                  ),
+                  LibraryTransferRaycastReview done => _buildRaycastReview(
+                    done.plan,
+                  ),
+                  LibraryTransferBackupRequired done => _scroll(
+                    _buildBackupRequired(done),
+                  ),
+                  LibraryTransferBackupSaved done => _scroll(
+                    _buildBackupSaved(done),
+                  ),
+                  LibraryTransferBackupVerified done => _scroll(
+                    _buildBackupVerified(done),
+                  ),
+                  LibraryTransferStale() => _scroll(
+                    _buildMessage(
+                      context,
+                      'The library changed during the operation.'
+                      ' Start a new review to continue.',
+                    ),
+                  ),
+                  LibraryTransferApplying() => _buildMessage(
+                    context,
+                    'Applying the operation…',
+                  ),
+                  LibraryTransferRestoreDone done => _scroll(
+                    _buildRestoreDone(done),
+                  ),
+                  LibraryTransferImportDone done => _scroll(
+                    _buildImportDone(done),
+                  ),
+                  LibraryTransferUnsupportedFile() => _scroll(
+                    _buildUnsupported(context),
+                  ),
+                  LibraryTransferFailed() => _scroll(_buildFailed(context)),
+                },
               ),
-            ),
-            LibraryTransferApplying() => _buildMessage(
-              context,
-              'Applying the operation…',
-            ),
-            LibraryTransferRestoreDone done => _scroll(_buildRestoreDone(done)),
-            LibraryTransferImportDone done => _scroll(_buildImportDone(done)),
-            LibraryTransferUnsupportedFile() => _scroll(
-              _buildUnsupported(context),
-            ),
-            LibraryTransferFailed() => _scroll(_buildFailed(context)),
-          },
+            ],
+          ),
         );
         return wide
             ? Center(
@@ -139,23 +193,26 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
         const SizedBox(height: 16),
         FilledButton.icon(
           key: const Key('transfer-export-json'),
-          onPressed: () =>
-              widget.transfer.prepareExport(DocumentExportKind.json),
+          onPressed: () => _runOperationGuarded(
+            () => widget.transfer.prepareExport(DocumentExportKind.json),
+          ),
           icon: const Icon(Icons.file_download_outlined),
           label: const Text('Export JSON'),
         ),
         const SizedBox(height: 8),
         FilledButton.icon(
           key: const Key('transfer-export-markdown'),
-          onPressed: () =>
-              widget.transfer.prepareExport(DocumentExportKind.markdown),
+          onPressed: () => _runOperationGuarded(
+            () => widget.transfer.prepareExport(DocumentExportKind.markdown),
+          ),
           icon: const Icon(Icons.description_outlined),
           label: const Text('Export Markdown'),
         ),
         const SizedBox(height: 8),
         OutlinedButton.icon(
           key: const Key('transfer-import'),
-          onPressed: () => widget.transfer.startImport(),
+          onPressed: () =>
+              _runOperationGuarded(() => widget.transfer.startImport()),
           icon: const Icon(Icons.file_upload_outlined),
           label: const Text('Import from file…'),
         ),
@@ -191,7 +248,8 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
         const SizedBox(height: 16),
         FilledButton(
           key: const Key('transfer-export-save'),
-          onPressed: () => widget.transfer.exportPrepared(),
+          onPressed: () =>
+              _runOperationGuarded(() => widget.transfer.exportPrepared()),
           child: const Text('Save…'),
         ),
         const SizedBox(height: 8),
@@ -295,7 +353,9 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
               const SizedBox(height: 12),
               FilledButton(
                 key: continueKey,
-                onPressed: () => widget.transfer.continueFromReview(),
+                onPressed: () => _runOperationGuarded(
+                  () => widget.transfer.continueFromReview(),
+                ),
                 child: const Text('Continue…'),
               ),
               const SizedBox(height: 8),
@@ -471,7 +531,8 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
         const SizedBox(height: 16),
         FilledButton(
           key: const Key('transfer-backup-save'),
-          onPressed: () => widget.transfer.createBackupCopy(),
+          onPressed: () =>
+              _runOperationGuarded(() => widget.transfer.createBackupCopy()),
           child: const Text('Save backup copy…'),
         ),
         const SizedBox(height: 8),
@@ -496,7 +557,8 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
         const SizedBox(height: 16),
         FilledButton(
           key: const Key('transfer-backup-verify'),
-          onPressed: () => widget.transfer.verifyBackupCopy(),
+          onPressed: () =>
+              _runOperationGuarded(() => widget.transfer.verifyBackupCopy()),
           child: const Text('Verify by re-opening…'),
         ),
         const SizedBox(height: 8),
@@ -523,7 +585,7 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
         const SizedBox(height: 16),
         FilledButton(
           key: const Key('transfer-apply'),
-          onPressed: () => widget.transfer.apply(),
+          onPressed: () => _runOperationGuarded(() => widget.transfer.apply()),
           child: const Text('Apply'),
         ),
         const SizedBox(height: 8),

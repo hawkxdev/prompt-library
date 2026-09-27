@@ -1,6 +1,8 @@
 /// Transfer screen widget tests.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -578,6 +580,127 @@ void main() {
       expect(
         find.byKey(const Key('transfer-restore-differences')),
         findsOneWidget,
+      );
+    });
+  });
+
+  group('shutdown refusal', () {
+    testWidgets('idle buttons refuse with a live-region message', (
+      tester,
+    ) async {
+      final zoneErrors = <Object>[];
+      await runZonedGuarded(() async {
+        await pumpScreen(tester);
+        await tester.runAsync(() => transfer.beginShutdown());
+
+        await tester.tap(find.text('Export JSON'));
+        await tester.pump();
+        await tester.tap(find.text('Export Markdown'));
+        await tester.pump();
+        await tester.tap(find.text('Import from file…'));
+        await tester.pump();
+      }, (error, stackTrace) => zoneErrors.add(error));
+      expect(zoneErrors, isEmpty);
+      expect(find.byKey(const Key('transfer-shutdown-notice')), findsOneWidget);
+      expect(
+        find.text('The application is closing. The operation was not started.'),
+        findsOneWidget,
+      );
+      expect(transfer.state, isA<LibraryTransferIdle>());
+    });
+
+    testWidgets('the save action refuses and keeps the prepared export', (
+      tester,
+    ) async {
+      final zoneErrors = <Object>[];
+      await runZonedGuarded(() async {
+        await tester.runAsync(
+          () => transfer.prepareExport(DocumentExportKind.json),
+        );
+        await pumpScreen(tester);
+        await tester.runAsync(() => transfer.beginShutdown());
+
+        await tester.tap(find.byKey(const Key('transfer-export-save')));
+        await tester.pump();
+      }, (error, stackTrace) => zoneErrors.add(error));
+      expect(zoneErrors, isEmpty);
+      expect(find.byKey(const Key('transfer-shutdown-notice')), findsOneWidget);
+      expect(transfer.state, isA<LibraryTransferExportReady>());
+    });
+
+    testWidgets('the review and backup actions refuse after shutdown', (
+      tester,
+    ) async {
+      final zoneErrors = <Object>[];
+      await runZonedGuarded(() async {
+        repository.emit(LibrarySnapshot(entries: [testEntry('kept-1')]));
+        await tester.runAsync(() => transfer.settled);
+        files.pickResult = DocumentPicked(
+          fileName: 'library.json',
+          bytes: LibraryJsonCodec().encode(
+            LibraryDocument(
+              snapshot: LibrarySnapshot(
+                entries: [testEntry('kept-1'), testEntry('incoming-1')],
+              ),
+              exportedAt: DateTime.utc(2026, 9, 1),
+            ),
+          ),
+        );
+        await tester.runAsync(() => transfer.startImport());
+        await pumpScreen(tester);
+        await tester.runAsync(() => transfer.beginShutdown());
+
+        await tester.tap(find.byKey(const Key('transfer-restore-continue')));
+        await tester.pump();
+      }, (error, stackTrace) => zoneErrors.add(error));
+      expect(zoneErrors, isEmpty);
+      expect(find.byKey(const Key('transfer-shutdown-notice')), findsOneWidget);
+      expect(
+        transfer.state,
+        isA<LibraryTransferRestoreReview>(),
+        reason: 'the refused continue leaves the review intact',
+      );
+    });
+
+    testWidgets('a raycast row choice refuses after shutdown', (tester) async {
+      final zoneErrors = <Object>[];
+      await runZonedGuarded(() async {
+        files.pickResult = DocumentPicked(
+          fileName: 'snippets.json',
+          bytes: _bytes('[{"name":"Alpha","text":"a"}]'),
+        );
+        await tester.runAsync(() => transfer.startImport());
+        await pumpScreen(tester);
+        await tester.runAsync(() => transfer.beginShutdown());
+
+        await tester.tap(find.byKey(const Key('transfer-exclude-0')));
+        await tester.pump();
+      }, (error, stackTrace) => zoneErrors.add(error));
+      expect(zoneErrors, isEmpty);
+      expect(find.byKey(const Key('transfer-shutdown-notice')), findsOneWidget);
+      expect(
+        (transfer.state as LibraryTransferRaycastReview).selection,
+        isNull,
+        reason: 'the refused choice changed no selection',
+      );
+    });
+
+    testWidgets('a plain StateError is not swallowed by the wrapper', (
+      tester,
+    ) async {
+      final zoneErrors = <Object>[];
+      await runZonedGuarded(() async {
+        await pumpScreen(tester);
+        await tester.runAsync(() => transfer.dispose());
+
+        await tester.tap(find.text('Export JSON'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+      }, (error, stackTrace) => zoneErrors.add(error));
+      expect(zoneErrors, hasLength(1));
+      expect(
+        (zoneErrors.single as StateError).message,
+        'LibraryTransferController is disposed',
       );
     });
   });

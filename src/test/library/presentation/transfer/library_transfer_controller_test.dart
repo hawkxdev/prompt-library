@@ -591,6 +591,52 @@ void main() {
       },
     );
   });
+  group('observation errors', () {
+    test('invalidates a live review without zone errors', () async {
+      final zoneErrors = <Object>[];
+      await runZonedGuarded(() async {
+        await _startRestoreImport(repository, files, controller);
+        expect(controller.state, isA<LibraryTransferRestoreReview>());
+
+        repository.emitObservationError(StateError('observer crashed'));
+
+        expect(controller.state, isA<LibraryTransferStale>());
+      }, (error, stackTrace) => zoneErrors.add(error));
+      expect(zoneErrors, isEmpty);
+    });
+
+    test('is ignored outside a review', () async {
+      final zoneErrors = <Object>[];
+      await runZonedGuarded(() async {
+        expect(controller.state, isA<LibraryTransferIdle>());
+
+        repository.emitObservationError(StateError('observer crashed'));
+
+        expect(controller.state, isA<LibraryTransferIdle>());
+      }, (error, stackTrace) => zoneErrors.add(error));
+      expect(zoneErrors, isEmpty);
+    });
+
+    test('invalidates the review after a running operation settles', () async {
+      final zoneErrors = <Object>[];
+      await runZonedGuarded(() async {
+        await _startRestoreImport(repository, files, controller);
+        final gate = Completer<void>();
+        files.pickGate = gate;
+        files.pickResult = const DocumentPickCancelled();
+        final verifying = controller.verifyBackupCopy();
+        await pumpEventQueue();
+
+        repository.emitObservationError(StateError('observer crashed'));
+        gate.complete();
+        await verifying;
+
+        expect(controller.state, isA<LibraryTransferStale>());
+      }, (error, stackTrace) => zoneErrors.add(error));
+      expect(zoneErrors, isEmpty);
+    });
+  });
+
   group('backup and application', () {
     test('requires a backup copy for a non-empty library', () async {
       final expected = await _startRestoreImport(repository, files, controller);

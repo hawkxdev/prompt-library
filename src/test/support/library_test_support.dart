@@ -57,6 +57,11 @@ final class TestLibraryRepository implements LibraryRepository {
     _snapshots.addError(failure);
   }
 
+  /// Emits an untyped observation error on the snapshot stream.
+  void emitObservationError(Object error) {
+    _snapshots.addError(error);
+  }
+
   /// Closes stream resources.
   Future<void> close() => _snapshots.close();
 

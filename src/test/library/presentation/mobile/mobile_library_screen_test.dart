@@ -1609,6 +1609,29 @@ void main() {
     await disposeApp(tester);
   });
 
+  testWidgets('a library stream error is shown without reaching the zone', (
+    tester,
+  ) async {
+    final zoneErrors = <Object>[];
+    await runZonedGuarded(() async {
+      await pumpApp(tester);
+      repository.emit(
+        LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+      );
+      await pumpState(tester);
+
+      repository.emitObservationError(StateError('observer crashed'));
+      await pumpState(tester);
+    }, (error, stackTrace) => zoneErrors.add(error));
+    expect(zoneErrors, isEmpty);
+    expect(
+      find.text('The library could not be updated. Try again.'),
+      findsOneWidget,
+      reason: 'the surface reports the stream error to the user',
+    );
+    await disposeApp(tester);
+  });
+
   // === Transfer entry point ===
 
   testWidgets('mobile transfer entry opens the route with an empty library', (

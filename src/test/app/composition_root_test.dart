@@ -432,6 +432,61 @@ void main() {
     expect(returned, isTrue);
   });
 
+  test(
+    'request exit answers exit after a held operation is released',
+    () async {
+      final database = LibraryDatabase.forTesting(NativeDatabase.memory());
+      final repository = DriftLibraryRepository(database);
+      final controller = LibraryController(repository: repository);
+      final files = TestDocumentFiles();
+      final gate = Completer<void>();
+      files.pickGate = gate;
+      files.pickResult = const DocumentPickCancelled();
+      final transfer = LibraryTransferController(
+        repository: repository,
+        library: controller,
+        files: files,
+      );
+      final composition = PromptLibraryComposition(
+        applicationSurface: ApplicationSurface.desktop,
+        database: database,
+        repository: repository,
+        controller: controller,
+        clipboard: const _NoopClipboard(),
+        documentFiles: files,
+        transferController: transfer,
+      );
+      addTearDown(() => composition.dispose());
+      final lifecycle = PromptLibraryLifecycle(
+        composition.dispose,
+        beginShutdown: composition.beginTransferShutdown,
+      );
+
+      final picking = transfer.startImport();
+      await pumpEventQueue();
+
+      final shutdown = composition.beginTransferShutdown();
+      await pumpEventQueue();
+      var shutdownDone = false;
+      unawaited(shutdown.then((_) => shutdownDone = true));
+      await pumpEventQueue();
+      expect(
+        shutdownDone,
+        isFalse,
+        reason: 'the shutdown wait holds while the operation is held',
+      );
+
+      gate.complete();
+      await picking;
+      await shutdown;
+      expect(
+        await lifecycle.requestExit(),
+        AppExitResponse.exit,
+        reason: 'the watchdog vote answers exit after the held operation ends',
+      );
+    },
+  );
+
   test('exit voting through the composition seam holds and rejects', () async {
     final database = LibraryDatabase.forTesting(NativeDatabase.memory());
     final repository = DriftLibraryRepository(database);

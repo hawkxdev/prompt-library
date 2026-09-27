@@ -78,10 +78,16 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
       share: widget.share,
       haptics: widget.haptics,
     );
-    _subscription = widget.controller.states.listen((state) {
-      if (!mounted) return;
-      setState(() => _state = state);
-    });
+    _subscription = widget.controller.states.listen(
+      (state) {
+        if (!mounted) return;
+        setState(() => _state = state);
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!mounted) return;
+        _showMessage('The library could not be updated. Try again.');
+      },
+    );
     _transferSubscription = widget.transfer.states.listen((state) {
       if (!mounted) return;
       if (state is LibraryTransferRestoreDone) {

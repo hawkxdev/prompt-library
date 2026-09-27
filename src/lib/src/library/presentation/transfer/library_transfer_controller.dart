@@ -66,6 +66,7 @@ final class LibraryTransferController {
   bool _maintenanceActive = false;
   bool _staleDuringOperation = false;
   LibraryFailure? _snapshotFailure;
+  bool _snapshotObservationFailed = false;
   Completer<void>? _operationDone;
   Future<void>? _disposeFuture;
 
@@ -525,10 +526,19 @@ final class LibraryTransferController {
   /// Like a snapshot publication, an observation failure only matters while
   /// a review depends on the captured snapshot; it must not overwrite an
   /// applied result, a prepared export, or the application's own transaction.
+  /// An unexpected failure kind is not escalated into the zone: with a live
+  /// review it invalidates the review with the shared stale message, and
+  /// elsewhere it is ignored.
   void _handleSnapshotError(Object error, StackTrace stack) {
     if (_isDisposed) return;
     if (error is! LibraryFailure) {
-      Zone.current.handleUncaughtError(error, stack);
+      if (_maintenanceActive || _expected == null) return;
+      if (_busy) {
+        _snapshotObservationFailed = true;
+        return;
+      }
+      _clearWorking();
+      _emit(const LibraryTransferStale());
       return;
     }
     if (_maintenanceActive || _expected == null) return;
@@ -572,9 +582,10 @@ final class LibraryTransferController {
     } finally {
       _busy = false;
       final failure = _snapshotFailure;
-      final stale = _staleDuringOperation;
+      final stale = _staleDuringOperation || _snapshotObservationFailed;
       _snapshotFailure = null;
       _staleDuringOperation = false;
+      _snapshotObservationFailed = false;
       // A deferred invalidation applies only while the operation still holds
       // a review; an operation that already published its result or cleared
       // its working data keeps that outcome.
@@ -613,7 +624,7 @@ final class LibraryTransferController {
   void _ensureOperational() {
     _ensureActive();
     if (_shutdownStarted) {
-      throw StateError('LibraryTransferController is shutting down');
+      throw LibraryTransferShuttingDown();
     }
   }
 
@@ -676,6 +687,13 @@ Future<Uint8List> _encodeDocument(
     ).encode(document),
   },
 );
+
+/// Reports an operation refused because application shutdown began.
+final class LibraryTransferShuttingDown extends StateError {
+  /// Creates the shutdown refusal.
+  LibraryTransferShuttingDown()
+    : super('LibraryTransferController is shutting down');
+}
 
 /// Decodes the source in a worker isolate.
 Future<Object> _decodeDocument(Uint8List bytes, DocumentLimits limits) =>
