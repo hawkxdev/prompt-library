@@ -527,8 +527,8 @@ final class LibraryTransferController {
   /// a review depends on the captured snapshot; it must not overwrite an
   /// applied result, a prepared export, or the application's own transaction.
   /// An unexpected failure kind is not escalated into the zone: with a live
-  /// review it invalidates the review with the shared stale message, and
-  /// elsewhere it is ignored.
+  /// review it invalidates the review with the unexpected-outcome message,
+  /// and elsewhere it is ignored.
   void _handleSnapshotError(Object error, StackTrace stack) {
     if (_isDisposed) return;
     if (error is! LibraryFailure) {
@@ -538,7 +538,11 @@ final class LibraryTransferController {
         return;
       }
       _clearWorking();
-      _emit(const LibraryTransferStale());
+      _emit(
+        const LibraryTransferFailed(
+          code: DocumentFileFailureCode.unknownOutcome,
+        ),
+      );
       return;
     }
     if (_maintenanceActive || _expected == null) return;
@@ -582,7 +586,8 @@ final class LibraryTransferController {
     } finally {
       _busy = false;
       final failure = _snapshotFailure;
-      final stale = _staleDuringOperation || _snapshotObservationFailed;
+      final stale = _staleDuringOperation;
+      final observationFailed = _snapshotObservationFailed;
       _snapshotFailure = null;
       _staleDuringOperation = false;
       _snapshotObservationFailed = false;
@@ -593,6 +598,13 @@ final class LibraryTransferController {
         if (failure != null) {
           _clearWorking();
           _emit(LibraryTransferFailed(libraryFailure: failure));
+        } else if (observationFailed) {
+          _clearWorking();
+          _emit(
+            const LibraryTransferFailed(
+              code: DocumentFileFailureCode.unknownOutcome,
+            ),
+          );
         } else if (stale) {
           _clearWorking();
           _emit(const LibraryTransferStale());

@@ -596,25 +596,24 @@ void main() {
       final zoneErrors = <Object>[];
       await runZonedGuarded(() async {
         await _startRestoreImport(repository, files, controller);
-        expect(controller.state, isA<LibraryTransferRestoreReview>());
-
         repository.emitObservationError(StateError('observer crashed'));
-
-        expect(controller.state, isA<LibraryTransferStale>());
       }, (error, stackTrace) => zoneErrors.add(error));
       expect(zoneErrors, isEmpty);
+      expect(controller.state, isA<LibraryTransferFailed>());
+      expect(
+        (controller.state as LibraryTransferFailed).code,
+        DocumentFileFailureCode.unknownOutcome,
+        reason: 'an observation failure must not claim the library changed',
+      );
     });
 
     test('is ignored outside a review', () async {
       final zoneErrors = <Object>[];
       await runZonedGuarded(() async {
-        expect(controller.state, isA<LibraryTransferIdle>());
-
         repository.emitObservationError(StateError('observer crashed'));
-
-        expect(controller.state, isA<LibraryTransferIdle>());
       }, (error, stackTrace) => zoneErrors.add(error));
       expect(zoneErrors, isEmpty);
+      expect(controller.state, isA<LibraryTransferIdle>());
     });
 
     test('invalidates the review after a running operation settles', () async {
@@ -630,10 +629,14 @@ void main() {
         repository.emitObservationError(StateError('observer crashed'));
         gate.complete();
         await verifying;
-
-        expect(controller.state, isA<LibraryTransferStale>());
       }, (error, stackTrace) => zoneErrors.add(error));
       expect(zoneErrors, isEmpty);
+      expect(controller.state, isA<LibraryTransferFailed>());
+      expect(
+        (controller.state as LibraryTransferFailed).code,
+        DocumentFileFailureCode.unknownOutcome,
+        reason: 'the deferred observation failure keeps the honest message',
+      );
     });
   });
 

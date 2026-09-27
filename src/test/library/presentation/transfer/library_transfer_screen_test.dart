@@ -705,6 +705,43 @@ void main() {
     });
   });
 
+  testWidgets('an observation failure explains an unexpected outcome', (
+    tester,
+  ) async {
+    repository.emit(LibrarySnapshot(entries: [testEntry('kept-1')]));
+    await tester.runAsync(() => transfer.settled);
+    files.pickResult = DocumentPicked(
+      fileName: 'library.json',
+      bytes: LibraryJsonCodec().encode(
+        LibraryDocument(
+          snapshot: LibrarySnapshot(
+            entries: [testEntry('kept-1'), testEntry('incoming-1')],
+          ),
+          exportedAt: DateTime.utc(2026, 9, 1),
+        ),
+      ),
+    );
+    await tester.runAsync(() => transfer.startImport());
+    await pumpScreen(tester);
+    expect(transfer.state, isA<LibraryTransferRestoreReview>());
+
+    repository.emitObservationError(StateError('observer crashed'));
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pump();
+
+    expect(transfer.state, isA<LibraryTransferFailed>());
+    expect(
+      find.textContaining('The system returned an unexpected result'),
+      findsOneWidget,
+      reason: 'the surface names the unexpected outcome',
+    );
+    expect(
+      find.textContaining('The library changed'),
+      findsNothing,
+      reason: 'an observation failure must not claim a library change',
+    );
+  });
+
   group('large text in the standard route', () {
     Future<void> pumpRoute(WidgetTester tester) async {
       await tester.pumpWidget(
