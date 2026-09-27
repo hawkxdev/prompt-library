@@ -620,6 +620,10 @@ void main() {
       final zoneErrors = <Object>[];
       await runZonedGuarded(() async {
         await _startRestoreImport(repository, files, controller);
+        await controller.continueFromReview();
+        files.exportResult = DocumentSaved(path: '/tmp/backup.json');
+        await controller.createBackupCopy();
+        expect(controller.state, isA<LibraryTransferBackupSaved>());
         final gate = Completer<void>();
         files.pickGate = gate;
         files.pickResult = const DocumentPickCancelled();
