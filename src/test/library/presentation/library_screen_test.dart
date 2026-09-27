@@ -13,6 +13,7 @@ import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
 import 'package:prompt_library/src/library/presentation/library_detail.dart';
+import 'package:prompt_library/src/library/presentation/library_screen.dart';
 import 'package:prompt_library/src/library/presentation/library_document_files.dart';
 import 'package:prompt_library/src/library/presentation/library_filter.dart';
 import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
@@ -717,15 +718,41 @@ void main() {
   testWidgets('transfer entry is unreachable while the editor dialog is open', (
     tester,
   ) async {
-    await pumpApp(tester);
+    final pushedRouteTypes = <String>[];
+    final observer = _RouteTypeObserver(pushedRouteTypes);
+    await tester.pumpWidget(
+      MaterialApp(
+        navigatorObservers: [observer],
+        home: LibraryScreen(
+          controller: controller,
+          clipboard: clipboard,
+          transfer: transfer,
+        ),
+      ),
+    );
     repository.emit(
       LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
     );
     await pumpState(tester);
+    final baselinePushes = pushedRouteTypes.length;
 
     await tester.tap(find.byTooltip('New prompt'));
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
+
     expect(find.text('New prompt'), findsOneWidget);
+    expect(
+      find.byType(LibraryTransferScreen),
+      findsNothing,
+      reason: 'no transfer route exists at any moment while the editor is open',
+    );
+    expect(
+      pushedRouteTypes.sublist(baselinePushes),
+      hasLength(1),
+      reason:
+          'opening the editor pushed exactly its dialog route and nothing '
+          'else: ${pushedRouteTypes.join(', ')}',
+    );
+    expect(pushedRouteTypes.last, startsWith('DialogRoute'));
     expect(
       find.byType(ModalBarrier),
       findsWidgets,
@@ -743,6 +770,13 @@ void main() {
       find.byType(LibraryTransferScreen),
       findsNothing,
       reason: 'the dialog intercepts the tap, so no transfer route opens',
+    );
+    expect(
+      pushedRouteTypes.sublist(baselinePushes).where(
+        (type) => type.contains('MaterialPageRoute'),
+      ),
+      isEmpty,
+      reason: 'the navigator never pushed a transfer route',
     );
     await disposeApp(tester);
   });
@@ -1125,6 +1159,18 @@ void main() {
     expect(controller.state.filter.searchQuery, 'Alp');
     await disposeApp(tester);
   });
+}
+
+/// Records the runtime type of every pushed route.
+final class _RouteTypeObserver extends NavigatorObserver {
+  _RouteTypeObserver(this.pushed);
+
+  final List<String> pushed;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    pushed.add(route.runtimeType.toString());
+  }
 }
 
 /// Reports whether keyboard focus sits inside the widget carrying [key].
