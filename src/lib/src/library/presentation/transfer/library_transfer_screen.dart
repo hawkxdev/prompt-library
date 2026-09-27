@@ -103,24 +103,11 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 640;
-        final notice = _shutdownNotice;
         final body = Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (notice != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Semantics(
-                    liveRegion: true,
-                    child: Text(
-                      notice,
-                      key: const Key('transfer-shutdown-notice'),
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  ),
-                ),
               Expanded(
                 child: switch (_state) {
                   LibraryTransferIdle() => _scroll(_buildIdle(context)),
@@ -149,9 +136,8 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
                       ' Start a new review to continue.',
                     ),
                   ),
-                  LibraryTransferApplying() => _buildMessage(
-                    context,
-                    'Applying the operation…',
+                  LibraryTransferApplying() => _scroll(
+                    _buildMessage(context, 'Applying the operation…'),
                   ),
                   LibraryTransferRestoreDone done => _scroll(
                     _buildRestoreDone(done),
@@ -181,8 +167,30 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
   }
 
   /// Wraps fixed-height columns so large text scales scroll instead of
-  /// overflowing.
-  Widget _scroll(Widget child) => SingleChildScrollView(child: child);
+  /// overflowing; the shutdown notice travels with the scrolled content.
+  Widget _scroll(Widget child) {
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [if (_shutdownNotice != null) _buildShutdownNotice(), child],
+      ),
+    );
+  }
+
+  /// Builds the live-region shutdown refusal.
+  Widget _buildShutdownNotice() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Semantics(
+        liveRegion: true,
+        child: Text(
+          _shutdownNotice!,
+          key: const Key('transfer-shutdown-notice'),
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+      ),
+    );
+  }
 
   Widget _buildIdle(BuildContext context) {
     return Column(
@@ -341,6 +349,8 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
     return CustomScrollView(
       key: key,
       slivers: [
+        if (_shutdownNotice != null)
+          SliverToBoxAdapter(child: _buildShutdownNotice()),
         SliverToBoxAdapter(child: heading),
         const SliverToBoxAdapter(child: SizedBox(height: 12)),
         SliverList(

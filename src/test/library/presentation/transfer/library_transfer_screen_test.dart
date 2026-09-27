@@ -705,6 +705,96 @@ void main() {
     });
   });
 
+  group('large text in the standard route', () {
+    Future<void> pumpRoute(WidgetTester tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            appBar: AppBar(title: const Text('Transfer library')),
+            body: LibraryTransferScreen(transfer: transfer),
+          ),
+        ),
+      );
+      await tester.pump();
+    }
+
+    testWidgets('the applying state scrolls without overflow', (tester) async {
+      tester.view.physicalSize = const Size(320, 300);
+      tester.view.devicePixelRatio = 1;
+      tester.platformDispatcher.textScaleFactorTestValue = 3.1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.platformDispatcher.clearAllTestValues);
+      repository.emit(const LibrarySnapshot.empty());
+      await tester.runAsync(() => transfer.settled);
+      files.pickResult = DocumentPicked(
+        fileName: 'library.json',
+        bytes: LibraryJsonCodec().encode(
+          LibraryDocument(
+            snapshot: LibrarySnapshot(entries: [testEntry('incoming-1')]),
+            exportedAt: DateTime.utc(2026),
+          ),
+        ),
+      );
+      await tester.runAsync(() => transfer.startImport());
+      await tester.runAsync(() => transfer.continueFromReview());
+      final gate = Completer<void>();
+      repository.nextMutationGate = gate;
+      final applying = transfer.apply();
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+      await pumpRoute(tester);
+
+      expect(transfer.state, isA<LibraryTransferApplying>());
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'the applying message must scroll instead of overflowing',
+      );
+
+      gate.complete();
+      await tester.runAsync(() => applying);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    testWidgets('the shutdown notice scrolls and keeps the live region', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(320, 300);
+      tester.view.devicePixelRatio = 1;
+      tester.platformDispatcher.textScaleFactorTestValue = 3.1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.platformDispatcher.clearAllTestValues);
+      await pumpRoute(tester);
+      await tester.runAsync(() => transfer.beginShutdown());
+
+      await tester.ensureVisible(find.text('Export JSON'));
+      await tester.tap(find.text('Export JSON'));
+      await tester.pump();
+
+      expect(find.byKey(const Key('transfer-shutdown-notice')), findsOneWidget);
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'the notice must scroll together with the content',
+      );
+      final handle = tester.ensureSemantics();
+      final noticeData = find.semantics
+          .byLabel('The application is closing. The operation was not started.')
+          .evaluate()
+          .single
+          .getSemanticsData();
+      expect(
+        noticeData.flagsCollection.isLiveRegion,
+        isTrue,
+        reason: 'the refusal notice stays a live region',
+      );
+      handle.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  });
+
   group('operational coverage', () {
     testWidgets('review actions remain reachable in short large text views', (
       tester,
