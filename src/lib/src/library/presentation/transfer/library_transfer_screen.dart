@@ -15,10 +15,17 @@ import 'library_transfer_state.dart';
 /// Presents the managed transfer operation across window sizes.
 final class LibraryTransferScreen extends StatefulWidget {
   /// Creates the transfer screen.
-  const LibraryTransferScreen({required this.transfer, super.key});
+  const LibraryTransferScreen({
+    required this.transfer,
+    this.onFinished,
+    super.key,
+  });
 
   /// Owned operation controller.
   final LibraryTransferController transfer;
+
+  /// Called when the user closes a finished operation summary.
+  final VoidCallback? onFinished;
 
   @override
   State<LibraryTransferScreen> createState() => _LibraryTransferScreenState();
@@ -528,6 +535,12 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
     );
   }
 
+  /// Closes a finished summary and reports it to the host route.
+  void _finishSummary() {
+    widget.transfer.cancel();
+    widget.onFinished?.call();
+  }
+
   Widget _buildRestoreDone(LibraryTransferRestoreDone state) {
     return Column(
       key: const Key('transfer-restore-done'),
@@ -543,7 +556,8 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
           Text('The backup copy is kept as "${state.backupName}".'),
         const SizedBox(height: 16),
         FilledButton(
-          onPressed: () => widget.transfer.cancel(),
+          key: const Key('transfer-restore-done-button'),
+          onPressed: _finishSummary,
           child: const Text('Done'),
         ),
       ],
@@ -572,7 +586,8 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
             ),
         const SizedBox(height: 16),
         FilledButton(
-          onPressed: () => widget.transfer.cancel(),
+          key: const Key('transfer-import-done-button'),
+          onPressed: _finishSummary,
           child: const Text('Done'),
         ),
       ],

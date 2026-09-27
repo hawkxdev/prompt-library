@@ -144,6 +144,32 @@ void main() {
 
       expect(() => controller.selectEntry('missing'), throwsArgumentError);
     });
+
+    test('resetView restores the default view in one publication', () async {
+      final first = _entry('first', title: 'Alpha', isArchived: false);
+      final second = _entry('second', title: 'Beta', isArchived: true);
+      final third = _entry('third', title: 'Gamma', isArchived: false);
+      repository.emit(LibrarySnapshot(entries: [first, second, third]));
+      await pumpEventQueue();
+
+      controller.setFilterScope(LibraryFilterScope.archived);
+      controller.selectEntry('second');
+      await pumpEventQueue();
+      expect(controller.state.selectedEntryId, 'second');
+      expect(controller.state.filter.scope, LibraryFilterScope.archived);
+
+      final publications = <LibraryState>[];
+      final subscription = controller.states.listen(publications.add);
+      controller.resetView();
+      await pumpEventQueue();
+
+      expect(controller.state.filter, LibraryFilter());
+      expect(controller.state.visibleEntries.first.id, 'first');
+      expect(controller.state.selectedEntryId, 'first');
+      expect(publications, hasLength(1));
+
+      await subscription.cancel();
+    });
   });
 
   // === Mutation tests ===
@@ -768,11 +794,12 @@ EntryInput _input() {
 }
 
 /// Creates deterministic entry.
-Entry _entry(String id, {String? title}) {
+Entry _entry(String id, {String? title, bool isArchived = false}) {
   return Entry(
     id: id,
     title: title ?? 'Title $id',
     body: 'Body $id',
+    isArchived: isArchived,
     createdAt: DateTime.utc(2026, 8, 25),
     updatedAt: DateTime.utc(2026, 8, 25),
   );

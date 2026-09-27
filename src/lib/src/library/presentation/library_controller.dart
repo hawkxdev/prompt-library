@@ -95,6 +95,30 @@ final class LibraryController {
     _emit(_state.dismissFailure());
   }
 
+  /// Resets the view to the default filter and resolved selection.
+  ///
+  /// The selection is recomputed by the shared rule from an empty current
+  /// selection, so it becomes the first visible entry of the current
+  /// snapshot or null when none is visible.
+  void resetView() {
+    _ensureActive();
+    final snapshot = _state.snapshot;
+    final visibleEntries = snapshot == null
+        ? const <Never>[]
+        : deriveVisibleEntries(snapshot, LibraryFilter());
+    final selectedEntryId = resolveSelectedEntryId(
+      visibleEntries: visibleEntries,
+      currentSelectedId: null,
+    );
+    _emit(
+      _state.copyWith(
+        filter: LibraryFilter(),
+        visibleEntries: visibleEntries,
+        selectedEntryId: selectedEntryId,
+      ),
+    );
+  }
+
   /// Creates library entry.
   Future<void> createEntry(EntryInput input) {
     return _runMutation(

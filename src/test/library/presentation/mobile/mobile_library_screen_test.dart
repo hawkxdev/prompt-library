@@ -19,10 +19,13 @@ import 'package:prompt_library/src/library/presentation/library_haptics.dart';
 import 'package:prompt_library/src/library/presentation/library_share.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_entry_detail_screen.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_entry_editor_screen.dart';
+import 'package:prompt_library/src/library/presentation/mobile/mobile_library_screen.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_library_actions.dart';
 import 'package:prompt_library/src/library/presentation/library_document_files.dart';
 import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
 import 'package:prompt_library/src/library/presentation/transfer/library_transfer_screen.dart';
+import 'package:prompt_library/src/library/transfer/library_document.dart';
+import 'package:prompt_library/src/library/transfer/library_json_codec.dart';
 
 import '../../../support/library_test_support.dart';
 
@@ -31,6 +34,7 @@ void main() {
 
   late TestLibraryRepository repository;
   late LibraryController controller;
+  late TestDocumentFiles files;
   late LibraryTransferController transfer;
   late _RecordingClipboard clipboard;
   late _RecordingHaptics haptics;
@@ -39,7 +43,13 @@ void main() {
   setUp(() {
     repository = TestLibraryRepository();
     controller = LibraryController(repository: repository);
-    transfer = testTransferController(repository, controller);
+    files = TestDocumentFiles();
+    transfer = LibraryTransferController(
+      repository: repository,
+      library: controller,
+      files: files,
+      now: () => DateTime.utc(2026, 9, 27, 12),
+    );
     clipboard = _RecordingClipboard();
     haptics = _RecordingHaptics();
     actions = MobileLibraryActions(
@@ -1792,6 +1802,164 @@ void main() {
       'Transfer library',
     );
     handle.dispose();
+    await disposeApp(tester);
+  });
+
+  testWidgets('replacement resets the mobile view and mode', (tester) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(
+        entries: [
+          testEntry('kept-a', title: 'Alpha'),
+          testEntry('kept-c', title: 'Gamma', isArchived: true),
+        ],
+      ),
+    );
+    await pumpState(tester);
+    await openFilters(tester);
+    await tester.tap(find.byKey(const Key('mobile-mode-archived')));
+    await pumpState(tester);
+    await closeFilters(tester);
+    await tester.enterText(
+      find.byKey(const Key('mobile-library-search')),
+      'Gam',
+    );
+    await pumpState(tester);
+    expect(find.text('Gamma'), findsOneWidget);
+    expect(find.text('Alpha'), findsNothing);
+
+    files.pickResult = DocumentPicked(
+      fileName: 'library.json',
+      bytes: LibraryJsonCodec().encode(
+        LibraryDocument(
+          snapshot: LibrarySnapshot(
+            entries: [
+              testEntry('restored-1', title: 'Restored One'),
+              testEntry('restored-2', title: 'Restored Two'),
+            ],
+          ),
+          exportedAt: DateTime.utc(2026),
+        ),
+      ),
+    );
+    await tester.runAsync(() => transfer.startImport());
+    await tester.runAsync(() => transfer.continueFromReview());
+    files.exportResult = DocumentSaved(path: '/tmp/backup.json');
+    await tester.runAsync(() => transfer.createBackupCopy());
+    final current = await repository.getSnapshot();
+    files.pickResult = DocumentPicked(
+      fileName: 'backup.json',
+      bytes: LibraryJsonCodec().encode(
+        LibraryDocument(snapshot: current, exportedAt: DateTime.utc(2026)),
+      ),
+    );
+    await tester.runAsync(() => transfer.verifyBackupCopy());
+    await tester.runAsync(() => transfer.apply());
+    await pumpState(tester);
+
+    expect(
+      find.text('Restored One'),
+      findsOneWidget,
+      reason: 'the restored library is visible under the default view',
+    );
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('mobile-library-search')))
+          .controller
+          ?.text,
+      isEmpty,
+      reason: 'the mobile search field is cleared',
+    );
+    await disposeApp(tester);
+  });
+
+  testWidgets('mobile done returns exactly one route to the library', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          key: const Key('route-sentinel'),
+          body: Builder(
+            builder: (context) => FilledButton(
+              key: const Key('open-mobile-library'),
+              onPressed: () => Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) => MobileLibraryScreen(
+                    controller: controller,
+                    clipboard: clipboard,
+                    transfer: transfer,
+                    share: const UnavailableLibraryShare(),
+                    haptics: haptics,
+                  ),
+                ),
+              ),
+              child: const Text('Open library'),
+            ),
+          ),
+        ),
+      ),
+    );
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('kept-a', title: 'Alpha')]),
+    );
+    await tester.tap(find.byKey(const Key('open-mobile-library')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('mobile-transfer-button')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(find.byType(LibraryTransferScreen), findsOneWidget);
+
+    files.pickResult = DocumentPicked(
+      fileName: 'library.json',
+      bytes: LibraryJsonCodec().encode(
+        LibraryDocument(
+          snapshot: LibrarySnapshot(
+            entries: [testEntry('restored-1', title: 'Restored One')],
+          ),
+          exportedAt: DateTime.utc(2026),
+        ),
+      ),
+    );
+    await tester.runAsync(() => transfer.startImport());
+    await tester.runAsync(() => transfer.continueFromReview());
+    files.exportResult = DocumentSaved(path: '/tmp/backup.json');
+    await tester.runAsync(() => transfer.createBackupCopy());
+    final current = await repository.getSnapshot();
+    files.pickResult = DocumentPicked(
+      fileName: 'backup.json',
+      bytes: LibraryJsonCodec().encode(
+        LibraryDocument(snapshot: current, exportedAt: DateTime.utc(2026)),
+      ),
+    );
+    await tester.runAsync(() => transfer.verifyBackupCopy());
+    await tester.runAsync(() => transfer.apply());
+    await pumpState(tester);
+    expect(find.byKey(const Key('transfer-restore-done')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('transfer-restore-done-button')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.byType(LibraryTransferScreen), findsNothing);
+    expect(
+      find.byKey(const Key('mobile-library-search')),
+      findsOneWidget,
+      reason: 'Done popped exactly the transfer route, keeping the library',
+    );
+    expect(
+      find.byKey(const Key('route-sentinel')),
+      findsNothing,
+      reason:
+          'the sentinel stays offstage below the library; a double pop would '
+          'show it instead of the search field',
+    );
     await disposeApp(tester);
   });
 

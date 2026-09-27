@@ -23,6 +23,7 @@ import 'library_state.dart';
 import 'taxonomy_dialog.dart';
 import 'transfer/library_transfer_controller.dart';
 import 'transfer/library_transfer_screen.dart';
+import 'transfer/library_transfer_state.dart';
 
 /// Complete full-library experience.
 final class LibraryScreen extends StatefulWidget {
@@ -55,6 +56,7 @@ final class LibraryScreen extends StatefulWidget {
 final class _LibraryScreenState extends State<LibraryScreen> {
   late LibraryState _state;
   late final StreamSubscription<LibraryState> _subscription;
+  late final StreamSubscription<LibraryTransferState> _transferSubscription;
   late final TextEditingController _searchController;
   final FocusNode _searchFocus = FocusNode(debugLabel: 'library-search');
   final FocusNode _listFocus = FocusNode(debugLabel: 'library-list');
@@ -71,11 +73,22 @@ final class _LibraryScreenState extends State<LibraryScreen> {
       if (!mounted) return;
       setState(() => _state = state);
     });
+    _transferSubscription = widget.transfer.states.listen((state) {
+      if (!mounted) return;
+      if (state is LibraryTransferRestoreDone) {
+        widget.controller.resetView();
+        setState(() {
+          _searchController.clear();
+          _showNarrowDetail = false;
+        });
+      }
+    });
   }
 
   @override
   void dispose() {
     unawaited(_subscription.cancel());
+    unawaited(_transferSubscription.cancel());
     _searchController.dispose();
     _searchFocus.dispose();
     _listFocus.dispose();
@@ -254,7 +267,10 @@ final class _LibraryScreenState extends State<LibraryScreen> {
       MaterialPageRoute<void>(
         builder: (_) => Scaffold(
           appBar: AppBar(title: const Text('Transfer library')),
-          body: LibraryTransferScreen(transfer: widget.transfer),
+          body: LibraryTransferScreen(
+            transfer: widget.transfer,
+            onFinished: () => Navigator.of(context).pop(),
+          ),
         ),
       ),
     );

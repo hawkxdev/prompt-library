@@ -17,6 +17,7 @@ import '../library_share.dart';
 import '../library_state.dart';
 import '../transfer/library_transfer_controller.dart';
 import '../transfer/library_transfer_screen.dart';
+import '../transfer/library_transfer_state.dart';
 import 'mobile_entry_editor_screen.dart';
 import 'mobile_entry_detail_screen.dart';
 import 'mobile_filter_sheet.dart';
@@ -61,6 +62,7 @@ enum _MobileRowAction { favorite, archive, delete }
 final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
   late LibraryState _state;
   late final StreamSubscription<LibraryState> _subscription;
+  late final StreamSubscription<LibraryTransferState> _transferSubscription;
   late final TextEditingController _searchController;
   late final MobileLibraryActions _actions;
   MobileLibraryMode _mode = MobileLibraryMode.all;
@@ -80,11 +82,22 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
       if (!mounted) return;
       setState(() => _state = state);
     });
+    _transferSubscription = widget.transfer.states.listen((state) {
+      if (!mounted) return;
+      if (state is LibraryTransferRestoreDone) {
+        widget.controller.resetView();
+        setState(() {
+          _searchController.clear();
+          _mode = MobileLibraryMode.all;
+        });
+      }
+    });
   }
 
   @override
   void dispose() {
     unawaited(_subscription.cancel());
+    unawaited(_transferSubscription.cancel());
     _searchController.dispose();
     super.dispose();
   }
@@ -128,7 +141,10 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
       MaterialPageRoute<void>(
         builder: (_) => Scaffold(
           appBar: AppBar(title: const Text('Transfer library')),
-          body: LibraryTransferScreen(transfer: widget.transfer),
+          body: LibraryTransferScreen(
+            transfer: widget.transfer,
+            onFinished: () => Navigator.of(context).pop(),
+          ),
         ),
       ),
     );

@@ -8,26 +8,38 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompt_library/src/app/application_surface.dart';
 import 'package:prompt_library/src/app/prompt_library_app.dart';
+import 'package:prompt_library/src/library/models/library_failure.dart';
 import 'package:prompt_library/src/library/models/library_snapshot.dart';
 import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
 import 'package:prompt_library/src/library/presentation/library_detail.dart';
 import 'package:prompt_library/src/library/presentation/library_document_files.dart';
+import 'package:prompt_library/src/library/presentation/library_filter.dart';
 import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
 import 'package:prompt_library/src/library/presentation/transfer/library_transfer_screen.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_state.dart';
+import 'package:prompt_library/src/library/transfer/library_document.dart';
+import 'package:prompt_library/src/library/transfer/library_json_codec.dart';
 
 import '../../support/library_test_support.dart';
 
 void main() {
   late TestLibraryRepository repository;
   late LibraryController controller;
+  late TestDocumentFiles files;
   late LibraryTransferController transfer;
   late _TestClipboard clipboard;
 
   setUp(() {
     repository = TestLibraryRepository();
     controller = LibraryController(repository: repository);
-    transfer = testTransferController(repository, controller);
+    files = TestDocumentFiles();
+    transfer = LibraryTransferController(
+      repository: repository,
+      library: controller,
+      files: files,
+      now: () => DateTime.utc(2026, 9, 27, 12),
+    );
     clipboard = _TestClipboard();
   });
 
@@ -832,6 +844,262 @@ void main() {
       greaterThan(0),
       reason: 'the entry keeps a positive size at the accessibility scale',
     );
+    await disposeApp(tester);
+  });
+
+  // === View reset after replacement ===
+
+  Future<void> driveRestoreFlow(
+    WidgetTester tester,
+    LibrarySnapshot replacement,
+  ) async {
+    files.pickResult = DocumentPicked(
+      fileName: 'library.json',
+      bytes: LibraryJsonCodec().encode(
+        LibraryDocument(snapshot: replacement, exportedAt: DateTime.utc(2026)),
+      ),
+    );
+    await tester.runAsync(() => transfer.startImport());
+    await tester.runAsync(() => transfer.continueFromReview());
+    files.exportResult = DocumentSaved(path: '/tmp/backup.json');
+    await tester.runAsync(() => transfer.createBackupCopy());
+    final current = await repository.getSnapshot();
+    files.pickResult = DocumentPicked(
+      fileName: 'backup.json',
+      bytes: LibraryJsonCodec().encode(
+        LibraryDocument(snapshot: current, exportedAt: DateTime.utc(2026)),
+      ),
+    );
+    await tester.runAsync(() => transfer.verifyBackupCopy());
+    await tester.runAsync(() => transfer.apply());
+  }
+
+  testWidgets('replacement resets search, filter, and selection', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    final category = testCategory('category-1', 'Work');
+    repository.emit(
+      LibrarySnapshot(
+        entries: [
+          testEntry('kept-a', title: 'Alpha', categoryId: 'category-1'),
+          testEntry('kept-b', title: 'Beta'),
+          testEntry('kept-c', title: 'Gamma', isArchived: true),
+        ],
+        categories: [category],
+      ),
+    );
+    await pumpState(tester);
+    await tester.enterText(find.byKey(const Key('library-search')), 'Beta');
+    await pumpState(tester);
+    controller.setCategoryFilter('category-1');
+    await pumpState(tester);
+    expect(controller.state.filter.searchQuery, 'Beta');
+
+    await driveRestoreFlow(
+      tester,
+      LibrarySnapshot(
+        entries: [
+          testEntry('restored-1', title: 'Restored One'),
+          testEntry('restored-2', title: 'Restored Two'),
+        ],
+      ),
+    );
+    await pumpState(tester);
+
+    expect(controller.state.filter, LibraryFilter());
+    expect(controller.state.selectedEntryId, 'restored-1');
+    expect(
+      find.text('Restored One'),
+      findsNWidgets(2),
+      reason: 'the restored library is visible under the default view',
+    );
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('library-search')))
+          .controller
+          ?.text,
+      isEmpty,
+      reason: 'the surface search field is cleared',
+    );
+    await disposeApp(tester);
+  });
+
+  testWidgets('replacement resets the archived scope and narrow detail', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(700, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(
+        entries: [
+          testEntry('kept-a', title: 'Alpha'),
+          testEntry('kept-b', title: 'Beta'),
+          testEntry('kept-c', title: 'Gamma', isArchived: true),
+        ],
+      ),
+    );
+    await pumpState(tester);
+    controller.setFilterScope(LibraryFilterScope.archived);
+    await pumpState(tester);
+    expect(find.text('Gamma'), findsOneWidget);
+    expect(find.text('Alpha'), findsNothing);
+
+    await driveRestoreFlow(
+      tester,
+      LibrarySnapshot(
+        entries: [
+          testEntry('restored-1', title: 'Restored One'),
+          testEntry('restored-2', title: 'Restored Two'),
+        ],
+      ),
+    );
+    await pumpState(tester);
+
+    expect(controller.state.filter.scope, LibraryFilterScope.active);
+    expect(find.text('Restored One'), findsOneWidget);
+    expect(
+      find.byKey(const Key('library-search')),
+      findsOneWidget,
+      reason: 'the narrow detail view is closed back to the result list',
+    );
+    await disposeApp(tester);
+  });
+
+  testWidgets('raycast import does not reset the view', (tester) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('kept-a', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+    await tester.enterText(find.byKey(const Key('library-search')), 'Alp');
+    await pumpState(tester);
+    expect(controller.state.filter.searchQuery, 'Alp');
+
+    files.pickResult = DocumentPicked(
+      fileName: 'snippets.json',
+      bytes: Uint8List.fromList(
+        '[{"name":"Imported","text":"body"}]'.codeUnits,
+      ),
+    );
+    await tester.runAsync(() => transfer.startImport());
+    await tester.runAsync(() => transfer.continueFromReview());
+    files.exportResult = DocumentSaved(path: '/tmp/backup.json');
+    await tester.runAsync(() => transfer.createBackupCopy());
+    final current = await repository.getSnapshot();
+    files.pickResult = DocumentPicked(
+      fileName: 'backup.json',
+      bytes: LibraryJsonCodec().encode(
+        LibraryDocument(snapshot: current, exportedAt: DateTime.utc(2026)),
+      ),
+    );
+    await tester.runAsync(() => transfer.verifyBackupCopy());
+    await tester.runAsync(() => transfer.apply());
+    await pumpState(tester);
+
+    expect(transfer.state, isA<LibraryTransferImportDone>());
+    expect(
+      controller.state.filter.searchQuery,
+      'Alp',
+      reason: 'an import must not reset the view',
+    );
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('library-search')))
+          .controller
+          ?.text,
+      'Alp',
+    );
+    await disposeApp(tester);
+  });
+
+  testWidgets('done closes the transfer route back to the library', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('kept-a', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+    await tester.tap(find.byKey(const Key('library-transfer')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(find.byType(LibraryTransferScreen), findsOneWidget);
+
+    await driveRestoreFlow(
+      tester,
+      LibrarySnapshot(
+        entries: [testEntry('restored-1', title: 'Restored One')],
+      ),
+    );
+    await pumpState(tester);
+    expect(find.byKey(const Key('transfer-restore-done')), findsOneWidget);
+
+    await tester.tap(find.text('Done'));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.byType(LibraryTransferScreen), findsNothing);
+    expect(find.byKey(const Key('library-search')), findsOneWidget);
+    await disposeApp(tester);
+  });
+
+  testWidgets('failure and cancel do not reset the view', (tester) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('kept-a', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+    await tester.enterText(find.byKey(const Key('library-search')), 'Alp');
+    await pumpState(tester);
+    expect(controller.state.filter.searchQuery, 'Alp');
+
+    files.pickResult = DocumentPicked(
+      fileName: 'library.json',
+      bytes: LibraryJsonCodec().encode(
+        LibraryDocument(
+          snapshot: LibrarySnapshot(
+            entries: [testEntry('restored-1', title: 'Restored One')],
+          ),
+          exportedAt: DateTime.utc(2026),
+        ),
+      ),
+    );
+    await tester.runAsync(() => transfer.startImport());
+    await tester.runAsync(() => transfer.continueFromReview());
+    files.exportResult = DocumentSaved(path: '/tmp/backup.json');
+    await tester.runAsync(() => transfer.createBackupCopy());
+    final current = await repository.getSnapshot();
+    files.pickResult = DocumentPicked(
+      fileName: 'backup.json',
+      bytes: LibraryJsonCodec().encode(
+        LibraryDocument(snapshot: current, exportedAt: DateTime.utc(2026)),
+      ),
+    );
+    await tester.runAsync(() => transfer.verifyBackupCopy());
+    repository.nextFailure = LibraryFailure.databaseFailure(
+      code: LibraryDatabaseFailureCode.transactionFailed,
+    );
+    await tester.runAsync(() => transfer.apply());
+    await pumpState(tester);
+
+    expect(transfer.state, isA<LibraryTransferFailed>());
+    expect(controller.state.filter.searchQuery, 'Alp');
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('library-search')))
+          .controller
+          ?.text,
+      'Alp',
+    );
+
+    transfer.cancel();
+    await pumpState(tester);
+    expect(transfer.state, isA<LibraryTransferIdle>());
+    expect(controller.state.filter.searchQuery, 'Alp');
     await disposeApp(tester);
   });
 }
