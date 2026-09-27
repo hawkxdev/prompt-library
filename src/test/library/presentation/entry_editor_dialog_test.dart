@@ -3,8 +3,12 @@ library;
 
 import 'dart:async';
 
+import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:prompt_library/src/library/data/drift_library_repository.dart';
+import 'package:prompt_library/src/library/data/library_database.dart'
+    show LibraryDatabase;
 import 'package:prompt_library/src/library/models/entry.dart';
 import 'package:prompt_library/src/library/models/entry_input.dart';
 import 'package:prompt_library/src/library/models/entry_update.dart';
@@ -442,6 +446,187 @@ void main() {
       await repository.close();
     });
   });
+  group('restored library on real storage', () {
+    Future<(LibraryDatabase, DriftLibraryRepository, LibraryController, Entry)>
+    restoreLibrary(String? keyword) async {
+      final database = LibraryDatabase.forTesting(NativeDatabase.memory());
+      final repository = DriftLibraryRepository(database);
+      final entry = testEntry(
+        'restored-1',
+        title: 'Original title',
+        body: 'Body',
+        keyword: keyword,
+      );
+      await repository.restoreSnapshot(
+        expectedCurrent: const LibrarySnapshot.empty(),
+        replacement: LibrarySnapshot(entries: [entry]),
+      );
+      final controller = LibraryController(repository: repository);
+      return (database, repository, controller, entry);
+    }
+
+    Future<void> releaseLibrary(
+      WidgetTester tester,
+      LibraryDatabase database,
+      DriftLibraryRepository repository,
+      LibraryController controller,
+    ) async {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 1));
+      await tester.runAsync(() async {
+        await controller.dispose();
+        await database.close();
+      });
+    }
+
+    Future<void> pumpDialog(
+      WidgetTester tester,
+      LibraryController controller,
+      Entry entry,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showEntryEditorDialog(
+                context,
+                controller: controller,
+                entry: entry,
+              ),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pump();
+    }
+
+    testWidgets('a title-only edit keeps the exact restored keyword', (
+      tester,
+    ) async {
+      for (final keyword in ['  alias  ', '', null]) {
+        final (database, repository, controller, entry) = await restoreLibrary(
+          keyword,
+        );
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await pumpDialog(tester, controller, entry);
+
+        await tester.enterText(
+          find.byKey(const Key('editor-title')),
+          'New title',
+        );
+        await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+
+        final snapshot = await repository.getSnapshot();
+        expect(
+          snapshot.entries.single.keyword,
+          keyword,
+          reason: 'keyword $keyword survives a title-only edit verbatim',
+        );
+        await releaseLibrary(tester, database, repository, controller);
+      }
+    });
+
+    testWidgets('an explicit replacement trims and clearing stores null', (
+      tester,
+    ) async {
+      final (database, repository, controller, entry) = await restoreLibrary(
+        'old',
+      );
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await pumpDialog(tester, controller, entry);
+
+      await tester.enterText(find.byKey(const Key('editor-keyword')), ' new ');
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+
+      var snapshot = await repository.getSnapshot();
+      expect(snapshot.entries.single.keyword, 'new');
+
+      await pumpDialog(tester, controller, entry);
+      await tester.enterText(find.byKey(const Key('editor-keyword')), '');
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+
+      snapshot = await repository.getSnapshot();
+      expect(snapshot.entries.single.keyword, isNull);
+
+      await releaseLibrary(tester, database, repository, controller);
+    });
+
+    testWidgets('a refused write keeps the draft and a retry passes', (
+      tester,
+    ) async {
+      final (database, repository, controller, entry) = await restoreLibrary(
+        'old',
+      );
+      await database.customStatement('''
+        CREATE TRIGGER block_restored_update
+        BEFORE UPDATE ON entries
+        WHEN NEW.title = 'Blocked title'
+        BEGIN
+          SELECT RAISE(FAIL, 'blocked');
+        END;
+      ''');
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await pumpDialog(tester, controller, entry);
+
+      await tester.enterText(
+        find.byKey(const Key('editor-title')),
+        'Blocked title',
+      );
+      await tester.enterText(find.byKey(const Key('editor-body')), 'New body');
+      await tester.enterText(
+        find.byKey(const Key('editor-keyword')),
+        ' fresh ',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+
+      expect(find.byKey(const Key('editor-failure')), findsOneWidget);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('editor-title')))
+            .controller!
+            .text,
+        'Blocked title',
+        reason: 'the draft keeps the typed title after the refusal',
+      );
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('editor-body')))
+            .controller!
+            .text,
+        'New body',
+      );
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('editor-keyword')))
+            .controller!
+            .text,
+        ' fresh ',
+      );
+
+      await database.customStatement('DROP TRIGGER block_restored_update');
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+
+      final snapshot = await repository.getSnapshot();
+      expect(snapshot.entries.single.title, 'Blocked title');
+      expect(snapshot.entries.single.body, 'New body');
+      expect(snapshot.entries.single.keyword, 'fresh');
+
+      await releaseLibrary(tester, database, repository, controller);
+    });
+  });
+
   group('keyword intent', () {
     testWidgets('keeps the stored keyword when only the title changes', (
       tester,
