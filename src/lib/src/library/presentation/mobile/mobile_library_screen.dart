@@ -15,6 +15,8 @@ import '../library_failure_message.dart';
 import '../library_haptics.dart';
 import '../library_share.dart';
 import '../library_state.dart';
+import '../transfer/library_transfer_controller.dart';
+import '../transfer/library_transfer_screen.dart';
 import 'mobile_entry_editor_screen.dart';
 import 'mobile_entry_detail_screen.dart';
 import 'mobile_filter_sheet.dart';
@@ -27,6 +29,7 @@ final class MobileLibraryScreen extends StatefulWidget {
   const MobileLibraryScreen({
     required this.controller,
     required this.clipboard,
+    required this.transfer,
     required this.share,
     required this.haptics,
     super.key,
@@ -37,6 +40,9 @@ final class MobileLibraryScreen extends StatefulWidget {
 
   /// Exact clipboard boundary.
   final LibraryClipboard clipboard;
+
+  /// Shared transfer operation owner.
+  final LibraryTransferController transfer;
 
   /// System sharing boundary.
   final LibraryShare share;
@@ -116,6 +122,18 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
     );
   }
 
+  /// Opens the transfer operation route over the shared owner.
+  Future<void> _openTransfer() {
+    return Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: const Text('Transfer library')),
+          body: LibraryTransferScreen(transfer: widget.transfer),
+        ),
+      ),
+    );
+  }
+
   /// Builds the observable library state surface.
   Widget _buildBody() {
     if (_state.loadStatus == LibraryLoadStatus.loading &&
@@ -181,6 +199,12 @@ final class _MobileLibraryScreenState extends State<MobileLibraryScreen> {
             tooltip: 'Filters',
             onPressed: () => unawaited(_openFilters()),
             icon: const Icon(Icons.filter_list),
+          ),
+          IconButton(
+            key: const Key('mobile-transfer-button'),
+            tooltip: 'Transfer library',
+            onPressed: () => unawaited(_openTransfer()),
+            icon: const Icon(Icons.swap_horiz),
           ),
         ],
       ),

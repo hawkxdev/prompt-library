@@ -196,6 +196,7 @@ void main() {
                   builder: (_) => MobileLibraryScreen(
                     controller: controller,
                     clipboard: const _NoopClipboard(),
+                    transfer: transfer,
                     share: const UnavailableLibraryShare(),
                     haptics: const _NoopHaptics(),
                   ),

@@ -159,6 +159,7 @@ final class _PromptLibraryAppState extends State<PromptLibraryApp> {
     return MobileLibraryScreen(
       controller: widget.controller,
       clipboard: widget.clipboard,
+      transfer: widget.transferController,
       share: widget.share,
       haptics: widget.haptics,
     );

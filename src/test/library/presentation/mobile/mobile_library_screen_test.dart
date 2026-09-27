@@ -18,8 +18,11 @@ import 'package:prompt_library/src/library/presentation/library_filter.dart';
 import 'package:prompt_library/src/library/presentation/library_haptics.dart';
 import 'package:prompt_library/src/library/presentation/library_share.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_entry_detail_screen.dart';
+import 'package:prompt_library/src/library/presentation/mobile/mobile_entry_editor_screen.dart';
 import 'package:prompt_library/src/library/presentation/mobile/mobile_library_actions.dart';
+import 'package:prompt_library/src/library/presentation/library_document_files.dart';
 import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
+import 'package:prompt_library/src/library/presentation/transfer/library_transfer_screen.dart';
 
 import '../../../support/library_test_support.dart';
 
@@ -1593,6 +1596,226 @@ void main() {
     expect(clipboard.writes, isEmpty);
     expect(find.byKey(const Key('mobile-row-action-delete')), findsNothing);
 
+    await disposeApp(tester);
+  });
+
+  // === Transfer entry point ===
+
+  testWidgets('mobile transfer entry opens the route with an empty library', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    repository.emit(const LibrarySnapshot.empty());
+    await pumpState(tester);
+
+    expect(find.byKey(const Key('mobile-transfer-button')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('mobile-transfer-button')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.byType(LibraryTransferScreen), findsOneWidget);
+    expect(find.text('Export JSON'), findsOneWidget);
+
+    await tester.pageBack();
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(find.byType(LibraryTransferScreen), findsNothing);
+    expect(find.text('Your library is empty'), findsOneWidget);
+    await disposeApp(tester);
+  });
+
+  testWidgets('mobile transfer re-entry shows the owner state', (tester) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+    await tester.runAsync(
+      () => transfer.prepareExport(DocumentExportKind.json),
+    );
+    await pumpState(tester);
+
+    await tester.tap(find.byKey(const Key('mobile-transfer-button')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('transfer-export-name')),
+      findsOneWidget,
+      reason: 'the opened route shows the composition owner state',
+    );
+
+    await tester.pageBack();
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('mobile-transfer-button')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('transfer-export-name')),
+      findsOneWidget,
+      reason: 're-entering shows the state that survived route closure',
+    );
+    expect(find.byKey(const Key('transfer-idle')), findsNothing);
+    await disposeApp(tester);
+  });
+
+  testWidgets('mobile transfer entry is unreachable while the editor is open', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('mobile-create-entry')));
+    await tester.pumpAndSettle();
+    expect(find.byType(MobileEntryEditorScreen), findsOneWidget);
+
+    expect(
+      find.byKey(const Key('mobile-transfer-button')),
+      findsNothing,
+      reason:
+          'the opaque editor route moves the library offstage, so the entry '
+          'cannot be hit or focused',
+    );
+    expect(
+      find.byType(LibraryTransferScreen),
+      findsNothing,
+      reason: 'the full-screen editor covers the transfer entry',
+    );
+    await disposeApp(tester);
+  });
+
+  testWidgets('mobile transfer entry is unreachable while the detail is open', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+
+    await openDetail(tester, 'one');
+
+    await tester.tap(
+      find.byKey(const Key('mobile-transfer-button')),
+      warnIfMissed: false,
+    );
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byType(LibraryTransferScreen),
+      findsNothing,
+      reason: 'the full-screen detail absorbs taps meant for the entry',
+    );
+    expect(
+      find.byType(MobileEntryDetailScreen),
+      findsOneWidget,
+      reason: 'the detail route stays on top',
+    );
+    await disposeApp(tester);
+  });
+
+  testWidgets('row tap copies and does not open the transfer route', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(
+        entries: [testEntry('one', title: 'Alpha', body: 'b1')],
+      ),
+    );
+    await pumpState(tester);
+
+    final rowCenter = tester.getCenter(
+      find.byKey(const Key('mobile-entry-one')),
+    );
+    final tap = await tester.startGesture(rowCenter);
+    await tester.pump(const Duration(milliseconds: 30));
+    await tap.up();
+    await pumpState(tester);
+
+    expect(clipboard.writes, ['b1'], reason: 'the row tap still copies');
+    expect(
+      find.byType(LibraryTransferScreen),
+      findsNothing,
+      reason: 'the row tap must not open the transfer route',
+    );
+    await disposeApp(tester);
+  });
+
+  testWidgets('row custom semantic actions are unchanged by the entry', (
+    tester,
+  ) async {
+    final handle = tester.ensureSemantics();
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+
+    final node = find.semantics
+        .byLabel('Alpha')
+        .evaluate()
+        .single
+        .getSemanticsData();
+    final labels = (node.customSemanticsActionIds ?? const <int>[])
+        .map((id) => CustomSemanticsAction.getAction(id)?.label)
+        .toSet();
+    expect(labels, {
+      'Add to favorites',
+      'Archive',
+      'Delete',
+    }, reason: 'the row keeps exactly its three row actions');
+
+    handle.dispose();
+    await disposeApp(tester);
+  });
+
+  testWidgets('mobile transfer entry announces its tooltip', (tester) async {
+    final handle = tester.ensureSemantics();
+    await pumpApp(tester);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+
+    expect(
+      tester
+          .getSemantics(find.byKey(const Key('mobile-transfer-button')))
+          .tooltip,
+      'Transfer library',
+    );
+    handle.dispose();
+    await disposeApp(tester);
+  });
+
+  testWidgets('search bar with the transfer entry survives large text', (
+    tester,
+  ) async {
+    await pumpApp(tester);
+    tester.platformDispatcher.textScaleFactorTestValue = 3.1;
+    addTearDown(tester.platformDispatcher.clearAllTestValues);
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+
+    expect(tester.takeException(), isNull);
+    expect(
+      tester.getSize(find.byKey(const Key('mobile-library-search'))).width,
+      greaterThan(0),
+      reason: 'the search field keeps a positive width',
+    );
+    expect(
+      tester.getSize(find.byKey(const Key('mobile-transfer-button'))).width,
+      greaterThan(0),
+    );
     await disposeApp(tester);
   });
 }
