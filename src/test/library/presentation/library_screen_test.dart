@@ -14,6 +14,8 @@ import 'package:prompt_library/src/library/presentation/library_clipboard.dart';
 import 'package:prompt_library/src/library/presentation/library_controller.dart';
 import 'package:prompt_library/src/library/presentation/library_detail.dart';
 import 'package:prompt_library/src/library/presentation/library_screen.dart';
+import 'package:prompt_library/src/platform/macos/quick_panel_controller.dart';
+import 'package:prompt_library/src/platform/macos/unavailable_mac_quick_panel.dart';
 import 'package:prompt_library/src/library/presentation/library_document_files.dart';
 import 'package:prompt_library/src/library/presentation/library_filter.dart';
 import 'package:prompt_library/src/library/presentation/transfer/library_transfer_controller.dart';
@@ -772,9 +774,9 @@ void main() {
       reason: 'the dialog intercepts the tap, so no transfer route opens',
     );
     expect(
-      pushedRouteTypes.sublist(baselinePushes).where(
-        (type) => type.contains('MaterialPageRoute'),
-      ),
+      pushedRouteTypes
+          .sublist(baselinePushes)
+          .where((type) => type.contains('MaterialPageRoute')),
       isEmpty,
       reason: 'the navigator never pushed a transfer route',
     );
@@ -900,6 +902,84 @@ void main() {
       find.text('The library could not be updated. Try again.'),
       findsOneWidget,
       reason: 'the surface reports the stream error to the user',
+    );
+    await disposeApp(tester);
+  });
+
+  Future<void> pumpFullMacActions(WidgetTester tester) async {
+    final quick = QuickPanelController(
+      libraryController: controller,
+      clipboard: clipboard,
+      port: const UnavailableMacQuickPanel(),
+    );
+    await tester.pumpWidget(
+      PromptLibraryApp(
+        applicationSurface: ApplicationSurface.desktop,
+        controller: controller,
+        clipboard: clipboard,
+        transferController: transfer,
+        quickPanelController: quick,
+        quickAccessSupported: true,
+      ),
+    );
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+    await tester.runAsync(quick.dispose);
+  }
+
+  Finder searchEditable() {
+    return find.descendant(
+      of: find.byKey(const Key('library-search')),
+      matching: find.byType(EditableText),
+    );
+  }
+
+  testWidgets('search keeps a usable width in the mid-width window', (
+    tester,
+  ) async {
+    for (final width in [720.0, 800.0, 1039.0]) {
+      tester.view.physicalSize = Size(width, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await pumpFullMacActions(tester);
+
+      expect(find.byKey(const Key('library-transfer')), findsOneWidget);
+      expect(find.byTooltip('New prompt'), findsOneWidget);
+      expect(find.byKey(const Key('hotkey-settings')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      expect(
+        tester.getSize(searchEditable()).width,
+        greaterThanOrEqualTo(120),
+        reason: 'window $width must keep a usable search input',
+      );
+      await disposeApp(tester);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  testWidgets('search keeps a positive width at large text in the mid window', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 800);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 3.1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.platformDispatcher.clearAllTestValues);
+    await pumpFullMacActions(tester);
+
+    expect(tester.takeException(), isNull);
+    expect(
+      tester.getSize(searchEditable()).width,
+      greaterThan(0),
+      reason: 'the search input survives the accessibility scale',
+    );
+    expect(
+      tester.getSize(find.byKey(const Key('library-transfer'))).width,
+      greaterThan(0),
     );
     await disposeApp(tester);
   });

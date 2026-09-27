@@ -393,71 +393,131 @@ final class _LibraryScreenState extends State<LibraryScreen> {
   Widget _resultPane(LibrarySnapshot snapshot) {
     return Column(
       children: [
-        // Search and pane actions
+        // Search and pane actions. A narrow pane cannot fit the search field
+        // and every action in one row, so secondary actions move to a second
+        // row instead of squeezing the editable area to zero.
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  key: const Key('library-search'),
-                  controller: _searchController,
-                  focusNode: _searchFocus,
-                  onChanged: widget.controller.updateSearchQuery,
-                  decoration: const InputDecoration(
-                    hintText: 'Search prompts',
-                    prefixIcon: Icon(Icons.search),
-                    isDense: true,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final narrowPane = constraints.maxWidth < 340;
+              final wideWindow = MediaQuery.sizeOf(context).width >= 1040;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          key: const Key('library-search'),
+                          controller: _searchController,
+                          focusNode: _searchFocus,
+                          onChanged: widget.controller.updateSearchQuery,
+                          decoration: const InputDecoration(
+                            hintText: 'Search prompts',
+                            prefixIcon: Icon(Icons.search),
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'New prompt',
+                        onPressed: () => showEntryEditorDialog(
+                          context,
+                          controller: widget.controller,
+                        ),
+                        icon: const Icon(Icons.add),
+                      ),
+                      if (!narrowPane && !wideWindow)
+                        IconButton(
+                          tooltip: 'Library navigation',
+                          onPressed: _showLibraryNavigation,
+                          icon: const Icon(Icons.menu),
+                        ),
+                      if (!narrowPane)
+                        IconButton(
+                          key: const Key('library-transfer'),
+                          tooltip: 'Transfer library',
+                          onPressed: _openTransfer,
+                          icon: const Icon(Icons.swap_horiz),
+                        ),
+                      if (!narrowPane && widget.onConfigureHotKey != null)
+                        IconButton(
+                          key: const Key('hotkey-settings'),
+                          tooltip: 'Global shortcut',
+                          onPressed: widget.onConfigureHotKey,
+                          icon: const Icon(Icons.keyboard),
+                        ),
+                      if (!narrowPane && !wideWindow)
+                        PopupMenuButton<LibraryFilterScope>(
+                          tooltip: 'Library scope',
+                          onSelected: widget.controller.setFilterScope,
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(
+                              value: LibraryFilterScope.active,
+                              child: Text('All prompts'),
+                            ),
+                            PopupMenuItem(
+                              value: LibraryFilterScope.favorites,
+                              child: Text('Favorites'),
+                            ),
+                            PopupMenuItem(
+                              value: LibraryFilterScope.archived,
+                              child: Text('Archived'),
+                            ),
+                          ],
+                        ),
+                    ],
                   ),
-                ),
-              ),
-              if (MediaQuery.sizeOf(context).width < 1040)
-                IconButton(
-                  tooltip: 'Library navigation',
-                  onPressed: _showLibraryNavigation,
-                  icon: const Icon(Icons.menu),
-                ),
-              IconButton(
-                tooltip: 'New prompt',
-                onPressed: () => showEntryEditorDialog(
-                  context,
-                  controller: widget.controller,
-                ),
-                icon: const Icon(Icons.add),
-              ),
-              IconButton(
-                key: const Key('library-transfer'),
-                tooltip: 'Transfer library',
-                onPressed: _openTransfer,
-                icon: const Icon(Icons.swap_horiz),
-              ),
-              if (widget.onConfigureHotKey != null)
-                IconButton(
-                  key: const Key('hotkey-settings'),
-                  tooltip: 'Global shortcut',
-                  onPressed: widget.onConfigureHotKey,
-                  icon: const Icon(Icons.keyboard),
-                ),
-              if (MediaQuery.sizeOf(context).width < 1040)
-                PopupMenuButton<LibraryFilterScope>(
-                  tooltip: 'Library scope',
-                  onSelected: widget.controller.setFilterScope,
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(
-                      value: LibraryFilterScope.active,
-                      child: Text('All prompts'),
-                    ),
-                    PopupMenuItem(
-                      value: LibraryFilterScope.favorites,
-                      child: Text('Favorites'),
-                    ),
-                    PopupMenuItem(
-                      value: LibraryFilterScope.archived,
-                      child: Text('Archived'),
+                  if (narrowPane) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        if (!wideWindow)
+                          IconButton(
+                            tooltip: 'Library navigation',
+                            onPressed: _showLibraryNavigation,
+                            icon: const Icon(Icons.menu),
+                          ),
+                        IconButton(
+                          key: const Key('library-transfer'),
+                          tooltip: 'Transfer library',
+                          onPressed: _openTransfer,
+                          icon: const Icon(Icons.swap_horiz),
+                        ),
+                        if (widget.onConfigureHotKey != null)
+                          IconButton(
+                            key: const Key('hotkey-settings'),
+                            tooltip: 'Global shortcut',
+                            onPressed: widget.onConfigureHotKey,
+                            icon: const Icon(Icons.keyboard),
+                          ),
+                        if (!wideWindow)
+                          PopupMenuButton<LibraryFilterScope>(
+                            tooltip: 'Library scope',
+                            onSelected: widget.controller.setFilterScope,
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(
+                                value: LibraryFilterScope.active,
+                                child: Text('All prompts'),
+                              ),
+                              PopupMenuItem(
+                                value: LibraryFilterScope.favorites,
+                                child: Text('Favorites'),
+                              ),
+                              PopupMenuItem(
+                                value: LibraryFilterScope.archived,
+                                child: Text('Archived'),
+                              ),
+                            ],
+                          ),
+                      ],
                     ),
                   ],
-                ),
-            ],
+                ],
+              );
+            },
           ),
         ),
         // Result list or empty state
