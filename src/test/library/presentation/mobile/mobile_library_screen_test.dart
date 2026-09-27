@@ -1893,6 +1893,22 @@ void main() {
       isEmpty,
       reason: 'the mobile search field is cleared',
     );
+
+    await openFilters(tester);
+    expect(
+      tester
+          .widget<ListTile>(find.byKey(const Key('mobile-mode-all')))
+          .selected,
+      isTrue,
+      reason: 'the mobile mode returns to all',
+    );
+    expect(
+      tester
+          .widget<ListTile>(find.byKey(const Key('mobile-mode-archived')))
+          .selected,
+      isFalse,
+    );
+    await closeFilters(tester);
     await disposeApp(tester);
   });
 
