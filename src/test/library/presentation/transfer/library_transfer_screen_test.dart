@@ -4,6 +4,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show SemanticsNode;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompt_library/src/library/models/entry.dart';
@@ -830,6 +831,217 @@ void main() {
       handle.dispose();
       await tester.pumpWidget(const SizedBox.shrink());
     });
+  });
+
+  group('shutdown notice visibility', () {
+    Future<void> pumpRoute(WidgetTester tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            appBar: AppBar(title: const Text('Transfer library')),
+            body: LibraryTransferScreen(transfer: transfer),
+          ),
+        ),
+      );
+      await tester.pump();
+    }
+
+    List<SemanticsNode> noticeLiveRegionNodes(WidgetTester tester) {
+      const noticeText =
+          'The application is closing. The operation was not started.';
+      final nodes = <SemanticsNode>[];
+      bool visit(SemanticsNode node) {
+        final data = node.getSemanticsData();
+        if (data.flagsCollection.isLiveRegion && data.label == noticeText) {
+          nodes.add(node);
+        }
+        node.visitChildren(visit);
+        return true;
+      }
+
+      visit(tester.getSemantics(find.byType(MaterialApp)));
+      return nodes;
+    }
+
+    testWidgets('stays visible over a scrolled restore review', (tester) async {
+      tester.view.physicalSize = const Size(390, 500);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      repository.emit(LibrarySnapshot(entries: [testEntry('kept-1')]));
+      await tester.runAsync(() => transfer.settled);
+      files.pickResult = DocumentPicked(
+        fileName: 'library.json',
+        bytes: LibraryJsonCodec().encode(
+          LibraryDocument(
+            snapshot: LibrarySnapshot(
+              entries: [
+                for (var i = 0; i < 100; i++)
+                  testEntry(
+                    'incoming-$i',
+                    title: 'Incoming ${i.toString().padLeft(3, '0')}',
+                  ),
+              ],
+            ),
+            exportedAt: DateTime.utc(2026, 9, 1),
+          ),
+        ),
+      );
+      await tester.runAsync(() => transfer.startImport());
+      await pumpRoute(tester);
+      final reviewList = find
+          .descendant(
+            of: find.byKey(const Key('transfer-restore-differences')),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('transfer-restore-continue')),
+        1000,
+        maxScrolls: 100,
+        scrollable: reviewList,
+      );
+      await tester.runAsync(() => transfer.beginShutdown());
+      await tester.tap(find.byKey(const Key('transfer-restore-continue')));
+      await tester.pump();
+
+      expect(
+        find.byKey(const Key('transfer-shutdown-notice')),
+        findsOneWidget,
+        reason: 'the notice must stay built regardless of scroll position',
+      );
+      final noticeRect = tester.getRect(
+        find.byKey(const Key('transfer-shutdown-notice')),
+      );
+      expect(noticeRect.top, greaterThanOrEqualTo(0));
+      expect(noticeRect.bottom, lessThanOrEqualTo(500));
+      final handle = tester.ensureSemantics();
+      expect(
+        noticeLiveRegionNodes(tester),
+        hasLength(1),
+        reason: 'exactly one live-region node announces the refusal',
+      );
+      handle.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    testWidgets('stays visible over a scrolled raycast review', (tester) async {
+      tester.view.physicalSize = const Size(390, 500);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final source = StringBuffer('[');
+      for (var i = 0; i < 100; i++) {
+        if (i > 0) source.write(',');
+        source.write(
+          '{"name":"Row ${i.toString().padLeft(3, '0')}","text":"body $i"}',
+        );
+      }
+      source.write(']');
+      files.pickResult = DocumentPicked(
+        fileName: 'snippets.json',
+        bytes: _bytes(source.toString()),
+      );
+      await tester.runAsync(() => transfer.startImport());
+      await pumpRoute(tester);
+      final reviewList = find
+          .descendant(
+            of: find.byKey(const Key('transfer-raycast-rows')),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('transfer-import-continue')),
+        1000,
+        maxScrolls: 100,
+        scrollable: reviewList,
+      );
+      await tester.runAsync(() => transfer.beginShutdown());
+      await tester.tap(find.byKey(const Key('transfer-import-continue')));
+      await tester.pump();
+
+      expect(
+        find.byKey(const Key('transfer-shutdown-notice')),
+        findsOneWidget,
+        reason: 'the notice must stay built regardless of scroll position',
+      );
+      final noticeRect = tester.getRect(
+        find.byKey(const Key('transfer-shutdown-notice')),
+      );
+      expect(noticeRect.top, greaterThanOrEqualTo(0));
+      expect(noticeRect.bottom, lessThanOrEqualTo(500));
+      final handle = tester.ensureSemantics();
+      expect(
+        noticeLiveRegionNodes(tester),
+        hasLength(1),
+        reason: 'exactly one live-region node announces the refusal',
+      );
+      handle.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    testWidgets(
+      'a held applying operation with the notice survives large text',
+      (tester) async {
+        tester.view.physicalSize = const Size(320, 300);
+        tester.view.devicePixelRatio = 1;
+        tester.platformDispatcher.textScaleFactorTestValue = 3.1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        addTearDown(tester.platformDispatcher.clearAllTestValues);
+        repository.emit(const LibrarySnapshot.empty());
+        await tester.runAsync(() => transfer.settled);
+        files.pickResult = DocumentPicked(
+          fileName: 'library.json',
+          bytes: LibraryJsonCodec().encode(
+            LibraryDocument(
+              snapshot: LibrarySnapshot(entries: [testEntry('incoming-1')]),
+              exportedAt: DateTime.utc(2026, 9, 1),
+            ),
+          ),
+        );
+        await tester.runAsync(() => transfer.startImport());
+        await tester.runAsync(() => transfer.continueFromReview());
+        await pumpRoute(tester);
+        await tester.runAsync(() => transfer.beginShutdown());
+        await tester.ensureVisible(find.byKey(const Key('transfer-apply')));
+        await tester.tap(find.byKey(const Key('transfer-apply')));
+        await tester.pump();
+        expect(
+          find.byKey(const Key('transfer-shutdown-notice')),
+          findsOneWidget,
+        );
+        expect(
+          transfer.state,
+          isA<LibraryTransferBackupVerified>(),
+          reason: 'the refused apply leaves the verified state intact',
+        );
+
+        transfer.cancelShutdown();
+        final gate = Completer<void>();
+        repository.nextMutationGate = gate;
+        final applying = transfer.apply();
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+
+        expect(transfer.state, isA<LibraryTransferApplying>());
+        expect(
+          find.byKey(const Key('transfer-shutdown-notice')),
+          findsOneWidget,
+        );
+        expect(
+          tester.takeException(),
+          isNull,
+          reason:
+              'the notice block and the applying message share the short '
+              'window without overflow',
+        );
+
+        gate.complete();
+        await tester.runAsync(() => applying);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
   });
 
   group('operational coverage', () {

@@ -108,6 +108,13 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (_shutdownNotice != null)
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: constraints.maxHeight / 3,
+                  ),
+                  child: SingleChildScrollView(child: _buildShutdownNotice()),
+                ),
               Expanded(
                 child: switch (_state) {
                   LibraryTransferIdle() => _scroll(_buildIdle(context)),
@@ -167,15 +174,8 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
   }
 
   /// Wraps fixed-height columns so large text scales scroll instead of
-  /// overflowing; the shutdown notice travels with the scrolled content.
-  Widget _scroll(Widget child) {
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [if (_shutdownNotice != null) _buildShutdownNotice(), child],
-      ),
-    );
-  }
+  /// overflowing.
+  Widget _scroll(Widget child) => SingleChildScrollView(child: child);
 
   /// Builds the live-region shutdown refusal.
   Widget _buildShutdownNotice() {
@@ -349,8 +349,6 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
     return CustomScrollView(
       key: key,
       slivers: [
-        if (_shutdownNotice != null)
-          SliverToBoxAdapter(child: _buildShutdownNotice()),
         SliverToBoxAdapter(child: heading),
         const SliverToBoxAdapter(child: SizedBox(height: 12)),
         SliverList(
