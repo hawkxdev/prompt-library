@@ -6,6 +6,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prompt_library/src/app/application_surface.dart';
 import 'package:prompt_library/src/app/prompt_library_app.dart';
@@ -1632,6 +1633,143 @@ void main() {
     await disposeApp(tester);
   });
 
+  Future<void> pumpLibraryOverSentinel(WidgetTester tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          key: const Key('route-sentinel'),
+          body: Builder(
+            builder: (context) => FilledButton(
+              key: const Key('open-library'),
+              onPressed: () => Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) => MobileLibraryScreen(
+                    controller: controller,
+                    clipboard: clipboard,
+                    transfer: transfer,
+                    share: const UnavailableLibraryShare(),
+                    haptics: haptics,
+                  ),
+                ),
+              ),
+              child: const Text('Open library'),
+            ),
+          ),
+        ),
+      ),
+    );
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+    await tester.tap(find.byKey(const Key('open-library')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('mobile-transfer-button')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    files.pickResult = DocumentPicked(
+      fileName: 'library.json',
+      bytes: LibraryJsonCodec().encode(
+        LibraryDocument(
+          snapshot: LibrarySnapshot(
+            entries: [testEntry('restored-1', title: 'Restored')],
+          ),
+          exportedAt: DateTime.utc(2026),
+        ),
+      ),
+    );
+    await tester.runAsync(() => transfer.startImport());
+    await tester.runAsync(() => transfer.continueFromReview());
+    files.exportResult = DocumentSaved(path: '/tmp/backup.json');
+    await tester.runAsync(() => transfer.createBackupCopy());
+    final current = await repository.getSnapshot();
+    files.pickResult = DocumentPicked(
+      fileName: 'backup.json',
+      bytes: LibraryJsonCodec().encode(
+        LibraryDocument(snapshot: current, exportedAt: DateTime.utc(2026)),
+      ),
+    );
+    await tester.runAsync(() => transfer.verifyBackupCopy());
+    await tester.runAsync(() => transfer.apply());
+    await pumpState(tester);
+    expect(
+      find.byKey(const Key('transfer-restore-done-button')),
+      findsOneWidget,
+    );
+  }
+
+  Future<void> expectLibrarySurvivesDoubleDone(WidgetTester tester) async {
+    expect(
+      find.byKey(const Key('mobile-library-search')),
+      findsOneWidget,
+      reason: 'the library route survived the double Done activation',
+    );
+    expect(
+      find.byKey(const Key('route-sentinel')),
+      findsNothing,
+      reason: 'a double pop would reveal the sentinel instead',
+    );
+    await disposeApp(tester);
+    await tester.pumpWidget(const SizedBox.shrink());
+  }
+
+  testWidgets('double pointer Done activation keeps the mobile library', (
+    tester,
+  ) async {
+    await pumpLibraryOverSentinel(tester);
+    final center = tester.getCenter(
+      find.byKey(const Key('transfer-restore-done-button')),
+    );
+    final first = await tester.startGesture(center);
+    await first.up();
+    final second = await tester.startGesture(center);
+    await second.up();
+    await tester.pump();
+    await tester.pumpAndSettle();
+    await expectLibrarySurvivesDoubleDone(tester);
+  });
+
+  testWidgets('double Enter Done activation keeps the mobile library', (
+    tester,
+  ) async {
+    await pumpLibraryOverSentinel(tester);
+    var focused = _focusInside(const Key('transfer-restore-done-button'));
+    for (var i = 0; i < 12 && !focused; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      focused = _focusInside(const Key('transfer-restore-done-button'));
+    }
+    expect(focused, isTrue, reason: 'Tab reaches the Done action');
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    await tester.pumpAndSettle();
+    await expectLibrarySurvivesDoubleDone(tester);
+  });
+
+  testWidgets('double Space Done activation keeps the mobile library', (
+    tester,
+  ) async {
+    await pumpLibraryOverSentinel(tester);
+    var focused = _focusInside(const Key('transfer-restore-done-button'));
+    for (var i = 0; i < 12 && !focused; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      focused = _focusInside(const Key('transfer-restore-done-button'));
+    }
+    expect(focused, isTrue, reason: 'Tab reaches the Done action');
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pump();
+    await tester.pumpAndSettle();
+    await expectLibrarySurvivesDoubleDone(tester);
+  });
+
   testWidgets('restored library starts at the top after replacement', (
     tester,
   ) async {
@@ -2097,6 +2235,21 @@ void main() {
     );
     await disposeApp(tester);
   });
+}
+
+/// Reports whether keyboard focus sits inside the widget carrying [key].
+bool _focusInside(Key key) {
+  final context = FocusManager.instance.primaryFocus?.context;
+  if (context == null) return false;
+  var found = false;
+  context.visitAncestorElements((element) {
+    if (element.widget.key == key) {
+      found = true;
+      return false;
+    }
+    return true;
+  });
+  return found;
 }
 
 /// Runs one body under the iOS platform override.

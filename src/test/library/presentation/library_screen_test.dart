@@ -1068,6 +1068,113 @@ void main() {
     expect(rowRect.bottom, lessThanOrEqualTo(listRect.bottom));
   });
 
+  Future<void> pumpLibraryOverSentinel(WidgetTester tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          key: const Key('route-sentinel'),
+          body: Builder(
+            builder: (context) => FilledButton(
+              key: const Key('open-library'),
+              onPressed: () => Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) => LibraryScreen(
+                    controller: controller,
+                    clipboard: clipboard,
+                    transfer: transfer,
+                  ),
+                ),
+              ),
+              child: const Text('Open library'),
+            ),
+          ),
+        ),
+      ),
+    );
+    repository.emit(
+      LibrarySnapshot(entries: [testEntry('one', title: 'Alpha')]),
+    );
+    await pumpState(tester);
+    await tester.tap(find.byKey(const Key('open-library')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('library-transfer')));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    await driveRestoreFlow(
+      tester,
+      LibrarySnapshot(entries: [testEntry('restored-1', title: 'Restored')]),
+    );
+    await pumpState(tester);
+    expect(
+      find.byKey(const Key('transfer-restore-done-button')),
+      findsOneWidget,
+    );
+  }
+
+  Future<void> expectLibrarySurvivesDoubleDone(WidgetTester tester) async {
+    expect(
+      find.byKey(const Key('library-search')),
+      findsOneWidget,
+      reason: 'the library route survived the double Done activation',
+    );
+    expect(
+      find.byKey(const Key('route-sentinel')),
+      findsNothing,
+      reason: 'a double pop would reveal the sentinel instead',
+    );
+    await disposeApp(tester);
+    await tester.pumpWidget(const SizedBox.shrink());
+  }
+
+  testWidgets('double pointer Done activation keeps the library', (
+    tester,
+  ) async {
+    await pumpLibraryOverSentinel(tester);
+    final center = tester.getCenter(
+      find.byKey(const Key('transfer-restore-done-button')),
+    );
+    final first = await tester.startGesture(center);
+    await first.up();
+    final second = await tester.startGesture(center);
+    await second.up();
+    await tester.pump();
+    await tester.pumpAndSettle();
+    await expectLibrarySurvivesDoubleDone(tester);
+  });
+
+  testWidgets('double Enter Done activation keeps the library', (tester) async {
+    await pumpLibraryOverSentinel(tester);
+    var focused = _focusInside(const Key('transfer-restore-done-button'));
+    for (var i = 0; i < 12 && !focused; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      focused = _focusInside(const Key('transfer-restore-done-button'));
+    }
+    expect(focused, isTrue, reason: 'Tab reaches the Done action');
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    await tester.pumpAndSettle();
+    await expectLibrarySurvivesDoubleDone(tester);
+  });
+
+  testWidgets('double Space Done activation keeps the library', (tester) async {
+    await pumpLibraryOverSentinel(tester);
+    var focused = _focusInside(const Key('transfer-restore-done-button'));
+    for (var i = 0; i < 12 && !focused; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      focused = _focusInside(const Key('transfer-restore-done-button'));
+    }
+    expect(focused, isTrue, reason: 'Tab reaches the Done action');
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pump();
+    await tester.pumpAndSettle();
+    await expectLibrarySurvivesDoubleDone(tester);
+  });
+
   testWidgets('replacement resets search, filter, and selection', (
     tester,
   ) async {
