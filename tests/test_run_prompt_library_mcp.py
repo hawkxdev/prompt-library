@@ -8,8 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).parents[2]
-LAUNCHER = PROJECT_ROOT / "tools" / "run-prompt-library-mcp.sh"
+PROJECT_ROOT = Path(__file__).parents[1]
+LAUNCHER = PROJECT_ROOT / "scripts" / "run-prompt-library-mcp.sh"
 SECRET_NAMES = (
     "DEEPSEEK_API_KEY",
     "EXA_API_KEY",

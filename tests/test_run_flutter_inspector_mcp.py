@@ -11,7 +11,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-MODULE_PATH = Path(__file__).parents[1] / "run_flutter_inspector_mcp.py"
+MODULE_PATH = Path(__file__).parents[1] / "scripts" / "run_flutter_inspector_mcp.py"
 
 
 def _load_module():
