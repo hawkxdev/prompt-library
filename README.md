@@ -2,6 +2,12 @@
 
 PromptLibrary is a local Flutter application for storing prompts and reusable text on macOS and iPhone. Search your library, copy exact text, and move entries between devices using portable files.
 
+The project is in development. Cross-device portability acceptance is still in progress; the [known limitations](docs/known-limitations.md) describe unverified surfaces and reported defects.
+
+## Who it is for
+
+PromptLibrary is for people who keep recurring instructions, writing templates and other text they need to find and copy quickly. Entries stay in a local library; JSON backups and Markdown exports provide file-based portability.
+
 ## Features
 
 - Create and edit entries with categories, tags, favorites and reversible archiving.
@@ -11,6 +17,18 @@ PromptLibrary is a local Flutter application for storing prompts and reusable te
 - Export the whole library as JSON or readable Markdown, restore a JSON backup, and import Raycast snippets with a review of each row.
 
 The [application guide](src/README.md) describes controls, platform behavior and verification limits. iPad is a compatibility target; an optimized iPad interface is not claimed. App Store, TestFlight and notarized distribution are not provided by the current acceptance record.
+
+## Interface preview
+
+The macOS library presents search, categories, tags and the selected entry together:
+
+![PromptLibrary macOS library with synthetic example entries](docs/media/macos-library.jpg)
+
+The transfer screen exposes JSON export, Markdown export and file import:
+
+![PromptLibrary macOS transfer options](docs/media/macos-transfer.jpg)
+
+These are real macOS Debug screenshots with synthetic entries in an in-memory diagnostic library. They illustrate the interface; they do not certify live cross-device acceptance or distribution.
 
 ## Development setup
 
@@ -56,6 +74,14 @@ Native tests, builds and live device checks follow the assigned scope. Their com
 
 Start with [AGENTS.md](AGENTS.md), the [documentation index](docs/knowledge-index.md) and [requirements navigation](specs/README.md) before making changes. Public project skills use these repository sources; private operational context is not a contribution prerequisite. Write all project artifacts in English. Internal planning, review, research and accounting archives are excluded from the shared documentation.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for bug reports, focused changes and local checks. Use synthetic examples in issues and attachments; real libraries remain private.
+
 ## Data and platform limits
 
 The library is stored locally. Exported JSON and Markdown are unencrypted and contain library text; protect them accordingly. Transfer documents are limited to 32 MiB. Cloud synchronization and integration with third-party storage providers are not implemented; native file flows determine available destinations. Cross-device portability acceptance remains unfinished. See [known limitations](docs/known-limitations.md) and the [verification contract](docs/testing/library-portability.md).
+
+## License
+
+PromptLibrary is licensed under the [MIT License](LICENSE). Third-party dependencies and components retain their own licenses and copyright notices.
