@@ -28,7 +28,13 @@ The transfer screen exposes JSON export, Markdown export and file import:
 
 ![PromptLibrary macOS transfer options](docs/media/macos-transfer.jpg)
 
-These are real macOS Debug screenshots with synthetic entries in an in-memory diagnostic library. They illustrate the interface; they do not certify live cross-device acceptance or distribution.
+The iPhone interface separates the searchable list from an entry's details:
+
+| Library | Entry details |
+|---|---|
+| <img src="docs/media/iphone-library.jpg" alt="PromptLibrary list on an iPhone simulator with synthetic entries" width="300"> | <img src="docs/media/iphone-detail.jpg" alt="PromptLibrary entry details on an iPhone simulator" width="300"> |
+
+These are real Debug captures from macOS and an iPhone 17 simulator running iOS 26.5, using synthetic entries in an in-memory diagnostic library. They illustrate the interface; they do not certify physical iPhone behavior, live cross-device acceptance or distribution.
 
 ## Development setup
 

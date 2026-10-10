@@ -16,10 +16,10 @@ This index is the repository-accessible entry to project knowledge. Shared instr
 
 This index lists the selected public documentation, not an export of the internal development archive. Original plans, agent requests, review reports, research artifacts, incident histories and accounting remain local. Public requirements and technical explanations must be usable without those records, private helpers or machine paths.
 
-The README's public interface previews use two selected assets: `media/macos-library.jpg` and `media/macos-transfer.jpg`. Both are real macOS Debug captures using synthetic in-memory data. Private build, fixture and verification evidence is excluded.
+The README's public interface previews use four selected assets: `media/macos-library.jpg`, `media/macos-transfer.jpg`, `media/iphone-library.jpg` and `media/iphone-detail.jpg`. They are real Debug captures from macOS and an iPhone 17 simulator running iOS 26.5, using synthetic in-memory data. Private build, fixture and verification evidence is excluded.
 
 ## Documentation boundary
 
-The public documentation consists of this index, the portable document format, the two architecture guides, the development guide, portability verification and known limitations, plus the two named preview images. New public documents or media require explicit content classification and an update to this index. Do not reintroduce an internal archive by broadly allowing an entire documentation directory.
+The public documentation consists of this index, the portable document format, the two architecture guides, the development guide, portability verification and known limitations, plus the four named preview images. New public documents or media require explicit content classification and an update to this index. Do not reintroduce an internal archive by broadly allowing an entire documentation directory.
 
 Write public project prose in English. Exact format examples may include Unicode test text. An old passing run or a reorganized repository does not verify the current tree; acceptance needs the assigned criteria and actual result evidence. Keep original local evidence intact when preparing a sanitized explanation.
