@@ -20,19 +20,15 @@ The [application guide](src/README.md) describes controls, platform behavior and
 
 ## Interface preview
 
-The macOS library presents search, categories, tags and the selected entry together:
+The macOS interface combines search, categories, tags and entry details, with a separate transfer screen. The iPhone interface separates the searchable list from entry details. Select a preview to open the full-size capture.
 
-![PromptLibrary macOS library with synthetic example entries](docs/media/macos-library.jpg)
-
-The transfer screen exposes JSON export, Markdown export and file import:
-
-![PromptLibrary macOS transfer options](docs/media/macos-transfer.jpg)
-
-The iPhone interface separates the searchable list from an entry's details:
-
-| Library | Entry details |
+| macOS library | macOS transfer |
 |---|---|
-| ![PromptLibrary list on an iPhone simulator with synthetic entries](docs/media/iphone-library.jpg) | ![PromptLibrary entry details on an iPhone simulator](docs/media/iphone-detail.jpg) |
+| [![macOS library](docs/media/macos-library.jpg)](docs/media/macos-library.jpg) | [![macOS transfer](docs/media/macos-transfer.jpg)](docs/media/macos-transfer.jpg) |
+
+| iPhone library | iPhone details |
+|---|---|
+| [![iPhone library](docs/media/iphone-library-preview.svg)](docs/media/iphone-library.jpg) | [![iPhone details](docs/media/iphone-detail-preview.svg)](docs/media/iphone-detail.jpg) |
 
 These are real Debug captures from macOS and an iPhone 17 simulator running iOS 26.5, using synthetic entries in an in-memory diagnostic library. They illustrate the interface; they do not certify physical iPhone behavior, live cross-device acceptance or distribution.
 
