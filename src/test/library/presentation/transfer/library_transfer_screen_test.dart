@@ -3,6 +3,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show SemanticsNode;
 import 'package:flutter/services.dart';
@@ -432,6 +433,170 @@ void main() {
       (transfer.state as LibraryTransferRaycastReview).plan.predictedAdded,
       0,
     );
+  });
+
+  group('import card diagnostic alignment', () {
+    const warningText =
+        'Literal placeholders are kept as text and never executed.';
+
+    Future<void> pumpDiagnosticsReview(WidgetTester tester) async {
+      files.pickResult = DocumentPicked(
+        fileName: 'snippets.json',
+        bytes: _bytes(
+          '[{"name":" Alpha ","text":"two {clipboard}","folder":"work"},'
+          '{"name":"Broken"}]',
+        ),
+      );
+      await tester.runAsync(() => transfer.startImport());
+      await pumpScreen(tester);
+    }
+
+    testWidgets(
+      'diagnostics share the content inset of title and preview on desktop',
+      (tester) async {
+        tester.view.physicalSize = const Size(800, 1400);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+        try {
+          await pumpDiagnosticsReview(tester);
+
+          final warning = tester.getRect(find.text(warningText));
+          final titleChange = tester.getRect(find.textContaining('Title:'));
+          final failure = tester.getRect(find.textContaining('Row 2:'));
+          final title = tester.getRect(find.text('Alpha'));
+          final preview = tester.getRect(
+            find.text('Preview exact text and keyword'),
+          );
+
+          expect(
+            warning.left,
+            title.left,
+            reason: 'the warning aligns with the entry title',
+          );
+          expect(
+            warning.left,
+            preview.left,
+            reason: 'the warning aligns with the preview label',
+          );
+          expect(
+            titleChange.left,
+            warning.left,
+            reason: 'the title-change note shares the same inset',
+          );
+          expect(
+            failure.left,
+            warning.left,
+            reason: 'the invalid-row note shares the same inset',
+          );
+          expect(
+            warning.top - titleChange.bottom,
+            greaterThanOrEqualTo(4),
+            reason: 'stacked diagnostics keep readable vertical spacing',
+          );
+          expect(tester.takeException(), isNull);
+        } finally {
+          debugDefaultTargetPlatformOverride = null;
+        }
+      },
+    );
+
+    testWidgets('diagnostics stay inset and inside the card at 360 pixels', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(360, 1600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await pumpDiagnosticsReview(tester);
+
+      final warning = tester.getRect(find.text(warningText));
+      final preview = tester.getRect(
+        find.text('Preview exact text and keyword'),
+      );
+      final card = tester.getRect(find.byType(Card).first);
+
+      expect(
+        warning.left,
+        preview.left,
+        reason: 'the warning shares the preview label inset at mobile width',
+      );
+      expect(
+        warning.right,
+        lessThan(card.right - 8),
+        reason: 'the warning keeps the inset instead of touching the edge',
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('diagnostics remain readable at large text on 360 pixels', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(360, 2400);
+      tester.view.devicePixelRatio = 1;
+      tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.platformDispatcher.clearAllTestValues);
+      await pumpDiagnosticsReview(tester);
+
+      final warning = tester.getRect(find.text(warningText));
+      final preview = tester.getRect(
+        find.text('Preview exact text and keyword'),
+      );
+      final card = tester.getRect(find.byType(Card).first);
+
+      expect(
+        warning.left,
+        preview.left,
+        reason: 'large text keeps the shared inset',
+      );
+      expect(
+        warning.right,
+        lessThan(card.right - 8),
+        reason: 'large text wraps inside the card',
+      );
+      expect(
+        warning.height,
+        greaterThan(60),
+        reason: 'the warning occupies multiple readable lines at large text',
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('long diagnostics wrap within the card at 360 pixels', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(360, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final longName = 'L' * 90;
+      files.pickResult = DocumentPicked(
+        fileName: 'snippets.json',
+        bytes: _bytes(
+          '[{"name":" $longName ","text":"body {clipboard}","folder":"x"}]',
+        ),
+      );
+      await tester.runAsync(() => transfer.startImport());
+      await pumpScreen(tester);
+
+      final titleChange = tester.getRect(find.textContaining('Title:'));
+      final card = tester.getRect(find.byType(Card).first);
+
+      expect(
+        titleChange.left,
+        greaterThanOrEqualTo(card.left + 12),
+        reason: 'the long note keeps the content inset',
+      );
+      expect(
+        titleChange.width,
+        lessThan(card.width - 24),
+        reason: 'the long note wraps within the card',
+      );
+      expect(tester.takeException(), isNull);
+    });
   });
 
   testWidgets('file failure explains the recovery action', (tester) async {

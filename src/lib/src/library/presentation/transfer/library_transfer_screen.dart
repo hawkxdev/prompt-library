@@ -444,14 +444,23 @@ final class _LibraryTransferScreenState extends State<LibraryTransferScreen> {
             subtitle: Text(_outcomeLabel(row.outcome)),
           ),
           if (snippet != null && snippet.originalTitle != snippet.title)
-            Text(
-              'Title: ${jsonEncode(snippet.originalTitle)} → ${jsonEncode(snippet.title)}',
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+              child: Text(
+                'Title: ${jsonEncode(snippet.originalTitle)} → ${jsonEncode(snippet.title)}',
+              ),
             ),
           if (source.failure != null)
-            Text('Row ${index + 1}: ${source.failure!.code.name}'),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+              child: Text('Row ${index + 1}: ${source.failure!.code.name}'),
+            ),
           if (source.hasPlaceholderSyntax)
-            const Text(
-              'Literal placeholders are kept as text and never executed.',
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 4, 16, 4),
+              child: Text(
+                'Literal placeholders are kept as text and never executed.',
+              ),
             ),
           if (source.unknownFields.isNotEmpty)
             CheckboxListTile(
