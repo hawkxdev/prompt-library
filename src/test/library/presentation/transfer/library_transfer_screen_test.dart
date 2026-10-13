@@ -439,12 +439,26 @@ void main() {
     const warningText =
         'Literal placeholders are kept as text and never executed.';
 
+    /// Pumps the review holding both diagnostic variants of one import.
     Future<void> pumpDiagnosticsReview(WidgetTester tester) async {
       files.pickResult = DocumentPicked(
         fileName: 'snippets.json',
         bytes: _bytes(
           '[{"name":" Alpha ","text":"two {clipboard}","folder":"work"},'
           '{"name":"Broken"}]',
+        ),
+      );
+      await tester.runAsync(() => transfer.startImport());
+      await pumpScreen(tester);
+    }
+
+    /// Pumps the review whose renamed title note wraps across many lines.
+    Future<void> pumpLongDiagnosticsReview(WidgetTester tester) async {
+      final longName = 'L' * 90;
+      files.pickResult = DocumentPicked(
+        fileName: 'snippets.json',
+        bytes: _bytes(
+          '[{"name":" $longName ","text":"body {clipboard}","folder":"x"}]',
         ),
       );
       await tester.runAsync(() => transfer.startImport());
@@ -565,6 +579,49 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets(
+      'diagnostics remain readable at accessibility scale on 360 pixels',
+      (tester) async {
+        tester.view.physicalSize = const Size(360, 3200);
+        tester.view.devicePixelRatio = 1;
+        tester.platformDispatcher.textScaleFactorTestValue = 3.1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        addTearDown(tester.platformDispatcher.clearAllTestValues);
+        await pumpDiagnosticsReview(tester);
+
+        final warning = tester.getRect(find.text(warningText));
+        final titleChange = tester.getRect(find.textContaining('Title:'));
+        final preview = tester.getRect(
+          find.text('Preview exact text and keyword'),
+        );
+        final card = tester.getRect(find.byType(Card).first);
+
+        expect(
+          warning.left,
+          preview.left,
+          reason: 'accessibility scale keeps the shared inset',
+        );
+        expect(
+          titleChange.left,
+          warning.left,
+          reason:
+              'the title-change note keeps the inset at accessibility scale',
+        );
+        expect(
+          warning.right,
+          lessThan(card.right - 8),
+          reason: 'accessibility scale wraps inside the card',
+        );
+        expect(
+          warning.top - titleChange.bottom,
+          greaterThanOrEqualTo(4),
+          reason: 'stacked diagnostics keep readable spacing at large text',
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+
     testWidgets('long diagnostics wrap within the card at 360 pixels', (
       tester,
     ) async {
@@ -572,15 +629,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final longName = 'L' * 90;
-      files.pickResult = DocumentPicked(
-        fileName: 'snippets.json',
-        bytes: _bytes(
-          '[{"name":" $longName ","text":"body {clipboard}","folder":"x"}]',
-        ),
-      );
-      await tester.runAsync(() => transfer.startImport());
-      await pumpScreen(tester);
+      await pumpLongDiagnosticsReview(tester);
 
       final titleChange = tester.getRect(find.textContaining('Title:'));
       final card = tester.getRect(find.byType(Card).first);
@@ -597,6 +646,40 @@ void main() {
       );
       expect(tester.takeException(), isNull);
     });
+
+    testWidgets(
+      'long diagnostics wrap within the card at accessibility scale',
+      (tester) async {
+        tester.view.physicalSize = const Size(360, 3200);
+        tester.view.devicePixelRatio = 1;
+        tester.platformDispatcher.textScaleFactorTestValue = 3.1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        addTearDown(tester.platformDispatcher.clearAllTestValues);
+        await pumpLongDiagnosticsReview(tester);
+
+        final titleChange = tester.getRect(find.textContaining('Title:'));
+        final card = tester.getRect(find.byType(Card).first);
+
+        expect(
+          titleChange.left,
+          greaterThanOrEqualTo(card.left + 12),
+          reason:
+              'the long note keeps the content inset at accessibility scale',
+        );
+        expect(
+          titleChange.width,
+          lessThan(card.width - 24),
+          reason: 'the long note wraps within the card at accessibility scale',
+        );
+        expect(
+          titleChange.height,
+          greaterThan(120),
+          reason: 'the long note occupies several wrapped lines at scale 3.1',
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
   });
 
   testWidgets('file failure explains the recovery action', (tester) async {
