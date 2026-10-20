@@ -8,6 +8,16 @@ The project is in development. Cross-device portability acceptance is still in p
 
 PromptLibrary is for people who keep recurring instructions, writing templates and other text they need to find and copy quickly. Entries stay in a local library; JSON backups and Markdown exports provide file-based portability.
 
+## Requirements and system behavior
+
+The transfer feature connects user workflows, data rules and acceptance criteria:
+
+- [Data contract](docs/data/library-document-format.md): entries, categories, tags and their relationships, exact-text preservation and validation rules.
+- [Transfer workflow](docs/architecture/library-transfer.md): import review, duplicate and conflict handling, verified backups and atomic library replacement.
+- [Acceptance criteria](docs/testing/library-portability.md): automated, native and live scenarios, with explicit verification boundaries.
+
+Live cross-device portability acceptance remains in progress.
+
 ## Features
 
 - Create and edit entries with categories, tags, favorites and reversible archiving.
